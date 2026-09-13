@@ -16,8 +16,8 @@ LABRADOR_SOURCES := \
 	$(LABRADOR_DIR)/fips202.c $(LABRADOR_DIR)/randombytes.c \
 	$(LABRADOR_DIR)/cpucycles.c
 
-.PHONY: all test prove clean
-all: build/test_vc build/test_tree build/prove_opening
+.PHONY: all test test-accumulator prove clean
+all: build/test_vc build/test_tree build/test_accumulator build/prove_opening
 build:
 	mkdir -p $@
 build/labrador:
@@ -32,12 +32,18 @@ build/test_vc: tests/test_vc.c src/vc.c $(LABRADOR_SOURCES) | build
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 build/test_tree: tests/test_tree.c src/tree.c src/vc.c $(LABRADOR_SOURCES) | build
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+build/test_accumulator: tests/test_accumulator.c src/accumulator.c src/tree.c \
+		src/vc.c $(LABRADOR_SOURCES) | build
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 build/prove_opening: examples/prove_opening.c src/vc.c $(LABRADOR_SOURCES) | build
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 test: build/test_vc build/test_tree
 	./build/test_vc
 	./build/test_tree
+test-accumulator: build/test_accumulator
+	./build/test_accumulator
 prove: build/prove_opening
 	./build/prove_opening
 clean:
-	rm -f build/test_vc build/test_tree build/prove_opening
+	rm -f build/test_vc build/test_tree build/test_accumulator \
+		build/prove_opening
