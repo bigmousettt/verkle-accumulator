@@ -419,3 +419,28 @@ int va_verify(const composite *composite_proof, const prncplstmnt *principal) {
              ? 1
              : composite_verify_principle(composite_proof, principal);
 }
+
+void va_commitment_encode(uint8_t out[VA_COMMITMENT_BYTES],
+                          const va_commitment *vc_commitment) {
+  size_t row;
+  polz z;
+
+  if (out == NULL || vc_commitment == NULL)
+    return;
+  for (row = 0; row < VA_OUTER_RANK; ++row) {
+    polz_frompolx(&z, &vc_commitment->u[row]);
+    polz_bitpack(&out[row * VA_RING_DEGREE * QBYTES], &z);
+  }
+}
+
+int va_commitment_equal(const va_commitment *left,
+                        const va_commitment *right) {
+  uint8_t left_bytes[VA_COMMITMENT_BYTES];
+  uint8_t right_bytes[VA_COMMITMENT_BYTES];
+
+  if (left == NULL || right == NULL)
+    return 0;
+  va_commitment_encode(left_bytes, left);
+  va_commitment_encode(right_bytes, right);
+  return memcmp(left_bytes, right_bytes, sizeof(left_bytes)) == 0;
+}

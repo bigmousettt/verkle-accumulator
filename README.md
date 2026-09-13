@@ -3,7 +3,7 @@
 Experimental implementation of the P2 Verkle-node vector commitment and its
 non-interactive LaBRADOR coordinate-opening relation.
 
-The current milestone implements:
+The current milestones implement:
 
 - `R_q = Z_q[X]/(X^64 + 1)`, with `q = 2^32 - 99`;
 - P2 parameters `(kappa, arity, m, r, n0, n1, mu) =
@@ -15,6 +15,14 @@ The current milestone implements:
 - Fiat-Shamir batching of the 43 full-ring equations into one relation, so
   LaBRADOR receives one full-ring and eight constant-coefficient constraints;
 - the upstream composite non-interactive LaBRADOR prover and verifier.
+- the paper's `VT.Setup`, `VT.Build`, and `VT.Upd` algorithms over the P2
+  vector commitment;
+- deterministic base-4096 paths for the universe `X = [N]`;
+- domain-separated `H_leaf` and `H_node` hashes into
+  `V = Z_q^8`, using SHAKE128 with rejection sampling;
+- bottom-up tree construction and transactional path-only updates;
+- the paper state layout `st_VT = (Node, Leaf)`, with cached node messages,
+  commitments, and VC prover states.
 
 LaBRADOR is pinned as an Apache-2.0 Git submodule under
 `third_party/labrador`.
@@ -33,6 +41,18 @@ cd verkle-accumulator
 make test
 ```
 
+`tests/test_tree.c` instantiates a depth-two tree, checks leaf and internal-node
+openings, adds and deletes elements, confirms that only the affected path is
+recommitted, and rejects an illegal repeated addition.
+
+The implementation uses a logically full fixed-depth tree and materializes
+only nodes whose subtree intersects `X = [N]`. Coordinates outside `X` use the
+public level-dependent values `epsilon_t`. This keeps all paths at exactly
+`d = ceil(log_4096(N))` levels while avoiding Ethereum's stem/suffix semantics.
+The build algorithm remains linear in `N`: constructing the complete P2 tree
+for `N = 2^32` is an offline-scale operation, so tests and profiling should use
+smaller `N` before adding persistent/out-of-core node storage.
+
 Run the full non-interactive proof (substantially slower) with:
 
 ```sh
@@ -47,6 +67,8 @@ The build leaves the pinned submodule unchanged. It applies
 `patches/labrador-mixed-constraints.patch` to a generated source copy because
 the upstream mixed-constraint loops do not advance correctly when full-ring
 and constant-coefficient relations appear in the same statement.
+It also applies `patches/labrador-zero-length-vla.patch` to avoid invoking an
+upstream conversion helper with a zero-length variable-length array.
 
 ## Security status
 

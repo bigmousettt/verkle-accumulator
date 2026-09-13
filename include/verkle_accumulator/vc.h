@@ -29,6 +29,8 @@ enum {
 
 #define VA_Q UINT64_C(4294967197)
 #define VA_MESSAGE_SCALARS ((size_t)VA_ARITY * VA_KAPPA)
+#define VA_COMMITMENT_BYTES \
+  ((size_t)VA_OUTER_RANK * VA_RING_DEGREE * QBYTES)
 
 typedef struct {
   uint8_t a_seed[16];
@@ -71,5 +73,9 @@ void va_opening_relation_clear(va_opening_relation *opening);
 int va_relation_verify(const va_opening_relation *opening);
 int va_prove(composite *composite_proof, const va_opening_relation *opening);
 int va_verify(const composite *composite_proof, const prncplstmnt *principal);
+void va_commitment_encode(uint8_t out[VA_COMMITMENT_BYTES],
+                          const va_commitment *vc_commitment);
+int va_commitment_equal(const va_commitment *left,
+                        const va_commitment *right);
 
 #endif
