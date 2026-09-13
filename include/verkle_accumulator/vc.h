@@ -75,6 +75,8 @@ int va_prove(composite *composite_proof, const va_opening_relation *opening);
 int va_verify(const composite *composite_proof, const prncplstmnt *principal);
 void va_commitment_encode(uint8_t out[VA_COMMITMENT_BYTES],
                           const va_commitment *vc_commitment);
+int va_commitment_decode(va_commitment *vc_commitment,
+                         const uint8_t in[VA_COMMITMENT_BYTES]);
 int va_commitment_equal(const va_commitment *left,
                         const va_commitment *right);
 

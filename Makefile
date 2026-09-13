@@ -32,7 +32,7 @@ build/test_vc: tests/test_vc.c src/vc.c $(LABRADOR_SOURCES) | build
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 build/test_tree: tests/test_tree.c src/tree.c src/vc.c $(LABRADOR_SOURCES) | build
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
-build/test_accumulator: tests/test_accumulator.c src/accumulator.c src/tree.c \
+build/test_accumulator: tests/test_accumulator.c src/accumulator.c src/wire.c src/tree.c \
 		src/vc.c $(LABRADOR_SOURCES) | build
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 build/prove_opening: examples/prove_opening.c src/vc.c $(LABRADOR_SOURCES) | build

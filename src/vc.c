@@ -433,6 +433,31 @@ void va_commitment_encode(uint8_t out[VA_COMMITMENT_BYTES],
   }
 }
 
+int va_commitment_decode(va_commitment *vc_commitment,
+                         const uint8_t in[VA_COMMITMENT_BYTES]) {
+  __attribute__((aligned(64))) uint8_t packed[VA_RING_DEGREE * QBYTES];
+  polz z;
+  size_t coefficient, row;
+
+  if (vc_commitment == NULL || in == NULL)
+    return 1;
+  for (row = 0; row < VA_OUTER_RANK; ++row) {
+    const uint8_t *encoded = &in[row * VA_RING_DEGREE * QBYTES];
+    for (coefficient = 0; coefficient < VA_RING_DEGREE; ++coefficient) {
+      const uint8_t *p = &encoded[coefficient * QBYTES];
+      const uint64_t value = (uint64_t)p[0] | (uint64_t)p[1] << 8U |
+                             (uint64_t)p[2] << 16U |
+                             (uint64_t)p[3] << 24U;
+      if (value >= VA_Q)
+        return 2;
+    }
+    memcpy(packed, encoded, sizeof(packed));
+    polz_bitunpack(&z, packed);
+    polz_topolx(&vc_commitment->u[row], &z);
+  }
+  return 0;
+}
+
 int va_commitment_equal(const va_commitment *left,
                         const va_commitment *right) {
   uint8_t left_bytes[VA_COMMITMENT_BYTES];
