@@ -110,7 +110,10 @@ metadata, use:
 The byte-level format is documented in
 [`docs/witness-wire-format.md`](docs/witness-wire-format.md).
 
-The build leaves the pinned submodule unchanged. It applies
+The build leaves the pinned submodule unchanged. Before applying either patch,
+it normalizes the generated copy to LF line endings; this keeps the build
+working when a Windows Git configuration checks the submodule out with CRLF
+line endings. It applies
 `patches/labrador-mixed-constraints.patch` to a generated source copy because
 the upstream mixed-constraint loops do not advance correctly when full-ring
 and constant-coefficient relations appear in the same statement.

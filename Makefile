@@ -23,10 +23,14 @@ build:
 	mkdir -p $@
 build/labrador:
 	mkdir -p $@
-build/labrador/chihuahua.c: $(LABRADOR_DIR)/chihuahua.c \
+build/labrador/chihuahua-source.c: $(LABRADOR_DIR)/chihuahua.c | build/labrador
+	sed 's/\r$$//' $< > $@
+build/labrador/chihuahua.c: build/labrador/chihuahua-source.c \
 		patches/labrador-mixed-constraints.patch | build/labrador
 	patch -s -o $@ $< < patches/labrador-mixed-constraints.patch
-build/labrador/polz.c: $(LABRADOR_DIR)/polz.c \
+build/labrador/polz-source.c: $(LABRADOR_DIR)/polz.c | build/labrador
+	sed 's/\r$$//' $< > $@
+build/labrador/polz.c: build/labrador/polz-source.c \
 		patches/labrador-zero-length-vla.patch | build/labrador
 	patch -s -o $@ $< < patches/labrador-zero-length-vla.patch
 build/test_vc: tests/test_vc.c src/vc.c $(LABRADOR_SOURCES) | build
@@ -75,4 +79,7 @@ clean:
 	rm -f build/test_vc build/test_tree build/test_accumulator \
 		build/prove_opening build/test_vc_p1 build/test_vc_p2 \
 		build/test_vc_p3 build/benchmark_p1 build/benchmark_p2 \
-		build/benchmark_p3
+		build/benchmark_p3 build/labrador/chihuahua-source.c \
+		build/labrador/chihuahua.c build/labrador/chihuahua.c.rej \
+		build/labrador/polz-source.c build/labrador/polz.c \
+		build/labrador/polz.c.rej
