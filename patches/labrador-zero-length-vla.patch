@@ -1,0 +1,12 @@
+--- polz.c
++++ polz.c
+@@ -713,7 +713,8 @@
+     len -= 16;
+   }
+ 
+-  frompolxvec(r,a,len);
++  if(len)
++    frompolxvec(r,a,len);
+ }
+ 
+ void polz_add(polz *r, const polz *a, const polz *b) {
