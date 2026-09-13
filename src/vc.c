@@ -21,9 +21,9 @@ static void *va_aligned_calloc(size_t count, size_t size) {
 }
 
 void va_default_seeds(uint8_t a[16], uint8_t b[16], uint8_t e[16]) {
-  static const uint8_t a0[16] = "VA-P2-inner-A";
-  static const uint8_t b0[16] = "VA-P2-outer-B";
-  static const uint8_t e0[16] = "VA-P2-random-E";
+  static const uint8_t a0[16] = "VA-" VA_PROFILE_NAME "-inner-A";
+  static const uint8_t b0[16] = "VA-" VA_PROFILE_NAME "-outer-B";
+  static const uint8_t e0[16] = "VA-" VA_PROFILE_NAME "-random-E";
   memcpy(a, a0, 16);
   memcpy(b, b0, 16);
   memcpy(e, e0, 16);
@@ -217,8 +217,9 @@ static void derive_batch_seed(uint8_t seed[16], const va_context *ctx,
                               const va_commitment *vc_commitment,
                               size_t coordinate,
                               const uint32_t value[VA_KAPPA]) {
-  enum { DOMAIN_BYTES = 24 };
-  static const uint8_t domain[DOMAIN_BYTES] = "VA-P2-full-relation-v1";
+  static const uint8_t domain[] =
+      "VA-" VA_PROFILE_NAME "-full-relation-v1";
+  enum { DOMAIN_BYTES = sizeof(domain) - 1U };
   uint8_t transcript[DOMAIN_BYTES + 3 * 16 + 8 + VA_KAPPA * 4 +
                      VA_OUTER_RANK * N * QBYTES];
   size_t off = 0, i, j;

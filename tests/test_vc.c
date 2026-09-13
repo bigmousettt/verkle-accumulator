@@ -17,7 +17,16 @@ int main(void) {
   va_commitment vc_commitment;
   va_prover_state state = {0};
   va_opening_relation opening = {0};
-  static const size_t coordinates[] = {0, 7, 8, 511, 512, 1703, 4095};
+  const size_t block_coordinates =
+      (size_t)VA_INNER_WIDTH * VA_RING_DEGREE / VA_KAPPA;
+  const size_t coordinates[] = {0,
+                                7,
+                                8,
+                                block_coordinates - 1U,
+                                block_coordinates,
+                                VA_ARITY / 2U + 3U,
+                                VA_ARITY - 1U};
+  const size_t tamper_coordinate = VA_ARITY / 3U;
   size_t i;
   int ret = EXIT_FAILURE;
 
@@ -38,7 +47,8 @@ int main(void) {
     va_opening_relation_clear(&opening);
   }
 
-  if (va_open(&opening, &ctx, &vc_commitment, &state, message, 1703) != 0)
+  if (va_open(&opening, &ctx, &vc_commitment, &state, message,
+              tamper_coordinate) != 0)
     goto end;
   opening.witness.s[2][0].vec->c[0] ^= 1;
   if (va_relation_verify(&opening) == 0) {
@@ -47,7 +57,8 @@ int main(void) {
   }
   va_opening_relation_clear(&opening);
 
-  puts("P2 relation: boundary openings accepted; tampering rejected");
+  printf("%s relation: boundary openings accepted; tampering rejected\n",
+         VA_PROFILE_NAME);
   ret = EXIT_SUCCESS;
 
 end:

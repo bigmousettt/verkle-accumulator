@@ -59,6 +59,10 @@ int acc_verify(const acc_public_parameters *pp, const acc_value *acc,
 int acc_contains(const acc_state *state, uint64_t x);
 double acc_witness_estimated_kib(const acc_witness *proof_bundle);
 
+/* Exact canonical bytes occupied by one composite proof inside VAW1. */
+int acc_composite_encoded_size(const composite *composite_proof,
+                               size_t *size);
+
 /* Canonical, versioned wire format. The encoded form contains no pointers or
  * native-size integers and may be persisted or sent to another verifier. */
 int acc_witness_encoded_size(const acc_witness *proof_bundle, size_t *size);
