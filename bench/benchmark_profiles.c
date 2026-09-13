@@ -9,9 +9,32 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "fips202.h"
 #include "verkle_accumulator/accumulator.h"
 
-enum { VAW1_HEADER_BYTES = 64 };
+enum {
+  BENCH_MAX_DEPTH = 4,
+  VAW1_HEADER_BYTES = 64
+};
+
+typedef struct {
+  size_t depth;
+  uint64_t epoch;
+  uint64_t x;
+  uint16_t path[BENCH_MAX_DEPTH];
+  vt_node *nodes;
+} path_fixture;
+
+typedef struct {
+  double prove_s;
+  double verify_s;
+  double level_prove_s[BENCH_MAX_DEPTH];
+  double level_verify_s[BENCH_MAX_DEPTH];
+  size_t level_proof_bytes[BENCH_MAX_DEPTH];
+  size_t proof_bytes;
+  size_t commitment_bytes;
+  size_t wire_bytes;
+} witness_metrics;
 
 static int checked_add(size_t left, size_t right, size_t *result) {
   if (result == NULL || left > SIZE_MAX - right)
@@ -27,47 +50,18 @@ static int checked_mul(size_t left, size_t right, size_t *result) {
   return 1;
 }
 
-static size_t public_matrix_ring_elements(void) {
-  return (size_t)VA_INNER_RANK * VA_S_BLOCK_LEN +
-         (size_t)VA_OUTER_RANK * VA_HAT_T_LEN +
-         (size_t)VA_OUTER_RANK * VA_RANDOMNESS_LEN;
-}
+static void *aligned_calloc(size_t count, size_t size) {
+  size_t bytes, rounded;
+  void *allocation;
 
-/*
- * Count allocated payload bytes, excluding allocator metadata and padding.
- * This is the measured experiment state, not a projection to N_max.
- */
-static int state_payload_bytes(const acc_state *state, size_t *bytes) {
-  size_t total = sizeof(*state), term, level, index;
-  if (state == NULL || bytes == NULL || state->tree.nodes == NULL ||
-      state->tree.node_counts == NULL)
-    return VT_ERR_ARGUMENT;
-  if (!checked_add(total, state->set_bytes, &total) ||
-      !checked_mul((size_t)state->tree.universe_size, sizeof(vt_leaf),
-                   &term) ||
-      !checked_add(total, term, &total) ||
-      !checked_mul(state->tree.depth, sizeof(size_t), &term) ||
-      !checked_add(total, term, &total) ||
-      !checked_mul(state->tree.depth, sizeof(vt_node *), &term) ||
-      !checked_add(total, term, &total))
-    return VT_ERR_OVERFLOW;
-  for (level = 0; level < state->tree.depth; ++level) {
-    if (!checked_mul(state->tree.node_counts[level], sizeof(vt_node), &term) ||
-        !checked_add(total, term, &total))
-      return VT_ERR_OVERFLOW;
-    for (index = 0; index < state->tree.node_counts[level]; ++index) {
-      const size_t polynomial_count =
-          (size_t)VA_BLOCKS * VA_S_BLOCK_LEN + VA_HAT_T_LEN +
-          VA_RANDOMNESS_LEN;
-      if (!checked_mul(VA_MESSAGE_SCALARS, sizeof(uint32_t), &term) ||
-          !checked_add(total, term, &total) ||
-          !checked_mul(polynomial_count, sizeof(poly), &term) ||
-          !checked_add(total, term, &total))
-        return VT_ERR_OVERFLOW;
-    }
-  }
-  *bytes = total;
-  return VT_OK;
+  if (!checked_mul(count, size, &bytes) || bytes == 0 ||
+      !checked_add(bytes, 63U, &rounded))
+    return NULL;
+  rounded &= ~(size_t)63U;
+  allocation = aligned_alloc(64, rounded);
+  if (allocation != NULL)
+    memset(allocation, 0, bytes);
+  return allocation;
 }
 
 static double now_seconds(void) {
@@ -77,89 +71,387 @@ static double now_seconds(void) {
   return (double)value.tv_sec + (double)value.tv_nsec / 1000000000.0;
 }
 
-static int proof_bytes(const acc_witness *proof_bundle, size_t *total) {
-  size_t result = 0, level;
-  if (proof_bundle == NULL || total == NULL)
+static void put_u64_le(uint8_t out[8], uint64_t value) {
+  size_t i;
+  for (i = 0; i < 8; ++i)
+    out[i] = (uint8_t)(value >> (8U * i));
+}
+
+static void set_message_value(uint32_t *message, size_t coordinate,
+                              const vt_value *value) {
+  memcpy(&message[coordinate * VA_KAPPA], value->scalar,
+         VA_KAPPA * sizeof(*message));
+}
+
+/* Match the production tree's domain-separated per-node randomness model. */
+static void fixture_randomness_seed(
+    uint8_t out[16], const uint8_t setup_seed[VT_SEED_BYTES], uint64_t epoch,
+    size_t level) {
+  static const uint8_t domain[] = "VA-benchmark-path-randomness-v1";
+  uint8_t encoded[16];
+  shake128incctx hash;
+
+  put_u64_le(&encoded[0], epoch);
+  put_u64_le(&encoded[8], (uint64_t)level);
+  shake128_inc_init(&hash);
+  shake128_inc_absorb(&hash, domain, sizeof(domain) - 1U);
+  shake128_inc_absorb(&hash, setup_seed, VT_SEED_BYTES);
+  shake128_inc_absorb(&hash, encoded, sizeof(encoded));
+  shake128_inc_finalize(&hash);
+  shake128_inc_squeeze(out, 16, &hash);
+}
+
+static int replace_node_commitment(const acc_public_parameters *pp,
+                                   path_fixture *fixture, size_t level) {
+  uint8_t randomness_seed[16];
+  va_commitment next_commitment;
+  va_prover_state state = {0};
+  vt_node *node;
+
+  if (pp == NULL || fixture == NULL || fixture->nodes == NULL ||
+      level >= fixture->depth)
     return VT_ERR_ARGUMENT;
+  node = &fixture->nodes[level];
+  fixture_randomness_seed(randomness_seed, pp->tree.setup_seed,
+                          fixture->epoch, level);
+  if (va_commit(&pp->tree.vc, node->values, randomness_seed, &next_commitment,
+                &state) != 0)
+    return VT_ERR_VC;
+  va_prover_state_clear(&node->vc_state);
+  node->vc_state = state;
+  node->commitment = next_commitment;
+  return VT_OK;
+}
+
+static void path_fixture_clear(path_fixture *fixture) {
+  size_t level;
+  if (fixture == NULL)
+    return;
+  if (fixture->nodes != NULL) {
+    for (level = 0; level < fixture->depth; ++level) {
+      free(fixture->nodes[level].values);
+      va_prover_state_clear(&fixture->nodes[level].vc_state);
+    }
+  }
+  free(fixture->nodes);
+  memset(fixture, 0, sizeof(*fixture));
+}
+
+/*
+ * Materialize exactly one authentication path at the target depth. Unopened
+ * coordinates use a deterministic public level value as benchmark-only
+ * filler. The selected leaf remains position-dependent: H_leaf(type, x).
+ */
+static int path_fixture_init(path_fixture *fixture,
+                             const acc_public_parameters *pp, uint64_t x,
+                             uint8_t type, acc_value *root) {
+  vt_value child;
+  size_t level, coordinate;
+  int ret = VT_OK;
+
+  if (fixture == NULL || pp == NULL || root == NULL ||
+      pp->tree.depth == 0 || pp->tree.depth > BENCH_MAX_DEPTH ||
+      x >= pp->tree.universe_size)
+    return VT_ERR_ARGUMENT;
+  memset(fixture, 0, sizeof(*fixture));
+  fixture->depth = pp->tree.depth;
+  fixture->x = x;
+  fixture->nodes = aligned_calloc(fixture->depth, sizeof(*fixture->nodes));
+  if (fixture->nodes == NULL)
+    return VT_ERR_MEMORY;
+  ret = vt_path(&pp->tree, x, fixture->path, fixture->depth);
+  if (ret != VT_OK)
+    goto err;
+
+  for (level = 0; level < fixture->depth; ++level) {
+    fixture->nodes[level].values =
+        calloc(VA_MESSAGE_SCALARS, sizeof(uint32_t));
+    if (fixture->nodes[level].values == NULL) {
+      ret = VT_ERR_MEMORY;
+      goto err;
+    }
+    for (coordinate = 0; coordinate < VA_ARITY; ++coordinate)
+      set_message_value(fixture->nodes[level].values, coordinate,
+                        &pp->tree.empty_values[level + 1U]);
+  }
+
+  vt_hash_leaf(&child, type, x);
+  for (level = fixture->depth; level-- > 0;) {
+    set_message_value(fixture->nodes[level].values, fixture->path[level],
+                      &child);
+    ret = replace_node_commitment(pp, fixture, level);
+    if (ret != VT_OK)
+      goto err;
+    if (level != 0)
+      vt_hash_node(&child, level, &fixture->nodes[level].commitment);
+  }
+  *root = fixture->nodes[0].commitment;
+  return VT_OK;
+
+err:
+  path_fixture_clear(fixture);
+  return ret;
+}
+
+/* Recommit the real target-depth path, from the leaf parent to the root. */
+static int path_fixture_update(path_fixture *fixture,
+                               const acc_public_parameters *pp, uint8_t type,
+                               acc_value *root,
+                               double level_commit_s[BENCH_MAX_DEPTH]) {
+  vt_value child;
+  size_t level;
+
+  if (fixture == NULL || pp == NULL || root == NULL ||
+      level_commit_s == NULL || fixture->nodes == NULL)
+    return VT_ERR_ARGUMENT;
+  memset(level_commit_s, 0,
+         BENCH_MAX_DEPTH * sizeof(*level_commit_s));
+  ++fixture->epoch;
+  vt_hash_leaf(&child, type, fixture->x);
+  for (level = fixture->depth; level-- > 0;) {
+    double start;
+    int ret;
+    set_message_value(fixture->nodes[level].values, fixture->path[level],
+                      &child);
+    start = now_seconds();
+    ret = replace_node_commitment(pp, fixture, level);
+    level_commit_s[level] = now_seconds() - start;
+    if (ret != VT_OK)
+      return ret;
+    if (level != 0)
+      vt_hash_node(&child, level, &fixture->nodes[level].commitment);
+  }
+  *root = fixture->nodes[0].commitment;
+  return VT_OK;
+}
+
+static int witness_generate(const acc_public_parameters *pp,
+                            const path_fixture *fixture,
+                            acc_witness *proof_bundle,
+                            witness_metrics *metrics) {
+  va_opening_relation opening = {0};
+  size_t level;
+  double total_start;
+  int ret = VT_OK;
+
+  if (pp == NULL || fixture == NULL || proof_bundle == NULL ||
+      metrics == NULL || fixture->nodes == NULL)
+    return VT_ERR_ARGUMENT;
+  memset(proof_bundle, 0, sizeof(*proof_bundle));
+  memset(metrics, 0, sizeof(*metrics));
+  proof_bundle->depth = fixture->depth;
+  proof_bundle->intermediate_count = fixture->depth - 1U;
+  proof_bundle->proof_count = fixture->depth;
+  proof_bundle->opening_proofs =
+      calloc(fixture->depth, sizeof(*proof_bundle->opening_proofs));
+  if (fixture->depth > 1U)
+    proof_bundle->intermediate_commitments = aligned_calloc(
+        fixture->depth - 1U,
+        sizeof(*proof_bundle->intermediate_commitments));
+  if (proof_bundle->opening_proofs == NULL ||
+      (fixture->depth > 1U &&
+       proof_bundle->intermediate_commitments == NULL)) {
+    ret = VT_ERR_MEMORY;
+    goto err;
+  }
+
+  total_start = now_seconds();
+  for (level = 0; level < fixture->depth; ++level) {
+    double start = now_seconds();
+    const vt_node *node = &fixture->nodes[level];
+    if (level != 0)
+      proof_bundle->intermediate_commitments[level - 1U] = node->commitment;
+    if (va_open(&opening, &pp->tree.vc, &node->commitment, &node->vc_state,
+                node->values, fixture->path[level]) != 0) {
+      ret = VT_ERR_VC;
+      goto err;
+    }
+    if (va_prove(&proof_bundle->opening_proofs[level], &opening) != 0) {
+      ret = VT_ERR_VC;
+      goto err;
+    }
+    metrics->level_prove_s[level] = now_seconds() - start;
+    va_opening_relation_clear(&opening);
+  }
+  metrics->prove_s = now_seconds() - total_start;
+  return VT_OK;
+
+err:
+  va_opening_relation_clear(&opening);
+  acc_witness_clear(proof_bundle);
+  return ret;
+}
+
+static int witness_verify_levels(const acc_public_parameters *pp,
+                                 const acc_value *root, uint64_t x,
+                                 const acc_witness *proof_bundle,
+                                 uint8_t type,
+                                 double level_verify_s[BENCH_MAX_DEPTH]) {
+  const va_commitment *current = root;
+  size_t level;
+
+  memset(level_verify_s, 0,
+         BENCH_MAX_DEPTH * sizeof(*level_verify_s));
+  for (level = 0; level < proof_bundle->depth; ++level) {
+    prncplstmnt principal = {0};
+    vt_value expected;
+    uint16_t path[BENCH_MAX_DEPTH];
+    double start;
+
+    if (vt_path(&pp->tree, x, path, proof_bundle->depth) != VT_OK)
+      return VT_ERR_RANGE;
+    if (level + 1U < proof_bundle->depth) {
+      const va_commitment *child =
+          &proof_bundle->intermediate_commitments[level];
+      vt_hash_node(&expected, level + 1U, child);
+    } else {
+      vt_hash_leaf(&expected, type, x);
+    }
+    if (va_statement_init(&principal, &pp->tree.vc, current, path[level],
+                          expected.scalar) != 0) {
+      free_prncplstmnt(&principal);
+      return VT_ERR_VC;
+    }
+    start = now_seconds();
+    if (va_verify(&proof_bundle->opening_proofs[level], &principal) != 0) {
+      free_prncplstmnt(&principal);
+      return VT_ERR_VC;
+    }
+    level_verify_s[level] = now_seconds() - start;
+    free_prncplstmnt(&principal);
+    if (level + 1U < proof_bundle->depth)
+      current = &proof_bundle->intermediate_commitments[level];
+  }
+  return VT_OK;
+}
+
+static int witness_measure_and_check(const acc_public_parameters *pp,
+                                     const acc_value *root, uint64_t x,
+                                     const acc_witness *proof_bundle,
+                                     uint8_t type,
+                                     witness_metrics *metrics) {
+  acc_witness decoded = {0};
+  uint8_t *encoded = NULL;
+  size_t level, written = 0, expected_wire;
+  double start;
+  int ret = VT_OK;
+
+  start = now_seconds();
+  if (acc_verify(pp, root, x, proof_bundle, type) != VT_OK) {
+    ret = VT_ERR_VC;
+    goto end;
+  }
+  metrics->verify_s = now_seconds() - start;
+  if (witness_verify_levels(pp, root, x, proof_bundle, type,
+                            metrics->level_verify_s) != VT_OK) {
+    ret = VT_ERR_VC;
+    goto end;
+  }
+
   for (level = 0; level < proof_bundle->proof_count; ++level) {
     size_t current;
     if (acc_composite_encoded_size(&proof_bundle->opening_proofs[level],
                                    &current) != VT_OK ||
-        result > SIZE_MAX - current)
-      return VT_ERR_OVERFLOW;
-    result += current;
+        !checked_add(metrics->proof_bytes, current,
+                     &metrics->proof_bytes)) {
+      ret = VT_ERR_OVERFLOW;
+      goto end;
+    }
+    metrics->level_proof_bytes[level] = current;
   }
-  *total = result;
-  return VT_OK;
+  if (!checked_mul(proof_bundle->intermediate_count, VA_COMMITMENT_BYTES,
+                   &metrics->commitment_bytes) ||
+      !checked_add(VAW1_HEADER_BYTES, metrics->commitment_bytes,
+                   &expected_wire) ||
+      !checked_add(expected_wire, metrics->proof_bytes, &expected_wire) ||
+      acc_witness_encoded_size(proof_bundle, &metrics->wire_bytes) != VT_OK ||
+      expected_wire != metrics->wire_bytes) {
+    ret = VT_ERR_OVERFLOW;
+    goto end;
+  }
+
+  encoded = malloc(metrics->wire_bytes);
+  if (encoded == NULL) {
+    ret = VT_ERR_MEMORY;
+    goto end;
+  }
+  if (acc_witness_encode(encoded, metrics->wire_bytes, &written,
+                         proof_bundle) != VT_OK ||
+      written != metrics->wire_bytes ||
+      acc_witness_decode(pp, &decoded, encoded, written) != VT_OK ||
+      acc_verify(pp, root, x, &decoded, type) != VT_OK) {
+    ret = VT_ERR_VC;
+    goto end;
+  }
+
+end:
+  free(encoded);
+  acc_witness_clear(&decoded);
+  return ret;
 }
 
-static int mean_proof_bytes(const acc_witness *proof_bundle, size_t *mean) {
-  size_t total;
-  if (proof_bundle == NULL || mean == NULL || proof_bundle->proof_count == 0 ||
-      proof_bytes(proof_bundle, &total) != VT_OK)
-    return VT_ERR_ARGUMENT;
-  *mean = (total + proof_bundle->proof_count / 2U) /
-          proof_bundle->proof_count;
-  return VT_OK;
+static size_t public_matrix_ring_elements(void) {
+  return (size_t)VA_INNER_RANK * VA_S_BLOCK_LEN +
+         (size_t)VA_OUTER_RANK * VA_HAT_T_LEN +
+         (size_t)VA_OUTER_RANK * VA_RANDOMNESS_LEN;
 }
 
-/*
- * This is a path-length projection, not a build at 2^32 leaves. Every level
- * uses the same VC relation, so the mean exact VAW1 composite-proof length
- * from the fully executed depth-two experiment is the relevant byte unit.
- */
-static int projected_witness_bytes(const acc_witness *measured,
-                                   size_t target_depth, size_t *projected) {
-  size_t mean_proof, commitments, proofs;
-  if (measured == NULL || projected == NULL || measured->proof_count == 0 ||
-      target_depth == 0 || mean_proof_bytes(measured, &mean_proof) != VT_OK)
-    return VT_ERR_ARGUMENT;
-  if (target_depth - 1U > SIZE_MAX / VA_COMMITMENT_BYTES)
-    return VT_ERR_OVERFLOW;
-  commitments = (target_depth - 1U) * VA_COMMITMENT_BYTES;
-  if (target_depth > SIZE_MAX / mean_proof)
-    return VT_ERR_OVERFLOW;
-  proofs = target_depth * mean_proof;
-  if (VAW1_HEADER_BYTES > SIZE_MAX - commitments ||
-      VAW1_HEADER_BYTES + commitments > SIZE_MAX - proofs)
-    return VT_ERR_OVERFLOW;
-  *projected = VAW1_HEADER_BYTES + commitments + proofs;
-  return VT_OK;
+static void print_level_headers(const char *prefix, const char *suffix) {
+  size_t level;
+  for (level = 0; level < BENCH_MAX_DEPTH; ++level)
+    printf(",%s_level%zu_%s", prefix, level + 1U, suffix);
+}
+
+static void print_level_doubles(const double values[BENCH_MAX_DEPTH]) {
+  size_t level;
+  for (level = 0; level < BENCH_MAX_DEPTH; ++level)
+    printf(",%.9f", values[level]);
+}
+
+static void print_level_sizes(const size_t values[BENCH_MAX_DEPTH]) {
+  size_t level;
+  for (level = 0; level < BENCH_MAX_DEPTH; ++level)
+    printf(",%zu", values[level]);
 }
 
 static void print_header(void) {
-  puts("profile,q,ell,kappa,L,m,r,n0,n1,mu,b0,delta0,b1,delta1,"
-       "raw_witness_ring_elements,public_matrix_ring_elements,"
-       "public_matrix_explicit_bytes,setup_seed_bytes,"
-       "public_parameters_expanded_ram_bytes,accumulator_value_bytes,"
-       "target_N,target_depth,experiment_N,experiment_depth,"
-       "experiment_state_payload_bytes,setup_s,build_s,add_s,"
-       "member_prove_s,member_verify_s,member_mean_proof_bytes,"
-       "member_wire_bytes,member_target_projected_bytes,delete_s,"
-       "nonmember_prove_s,nonmember_verify_s,nonmember_mean_proof_bytes,"
-       "nonmember_wire_bytes,nonmember_target_projected_bytes");
+  printf("profile,q,ell,kappa,L,m,r,n0,n1,mu,b0,delta0,b1,delta1,"
+         "universe_size,path_depth,proof_count,"
+         "intermediate_commitment_count,raw_witness_ring_elements,"
+         "public_matrix_ring_elements,public_matrix_explicit_bytes,"
+         "setup_seed_bytes,public_parameters_expanded_ram_bytes,"
+         "accumulator_value_bytes,setup_s,path_fixture_init_s,"
+         "add_path_update_s");
+  print_level_headers("add", "commit_s");
+  printf(",member_prove_s,member_verify_s,member_proof_bytes,"
+         "member_commitment_bytes,member_wire_bytes");
+  print_level_headers("member", "prove_s");
+  print_level_headers("member", "verify_s");
+  print_level_headers("member", "proof_bytes");
+  printf(",delete_path_update_s");
+  print_level_headers("delete", "commit_s");
+  printf(",nonmember_prove_s,nonmember_verify_s,nonmember_proof_bytes,"
+         "nonmember_commitment_bytes,nonmember_wire_bytes");
+  print_level_headers("nonmember", "prove_s");
+  print_level_headers("nonmember", "verify_s");
+  print_level_headers("nonmember", "proof_bytes");
+  putchar('\n');
 }
 
 int main(int argc, char **argv) {
   static const uint8_t setup_seed[VT_SEED_BYTES] =
       "VA-benchmark-setup-seed-v1";
-  static const uint8_t build_seed[VT_SEED_BYTES] =
-      "VA-benchmark-build-seed-v1";
-  static const uint64_t initial_set[] = {1};
-  const uint64_t target_n = UINT64_C(1) << 32U;
-  const uint64_t experiment_n = (uint64_t)VA_ARITY + 1U;
-  const uint64_t x = (uint64_t)VA_ARITY;
+  const uint64_t universe_size = UINT64_C(1) << 32U;
+  const uint64_t x = universe_size - 1U;
   acc_public_parameters pp = {0};
-  acc_state state = {0};
-  acc_value acc = {0}, updated = {0};
+  path_fixture fixture = {0};
+  acc_value root = {0};
   acc_witness member = {0}, nonmember = {0};
-  size_t member_wire = 0, nonmember_wire = 0;
-  size_t member_projected = 0, nonmember_projected = 0;
-  size_t member_mean_proof = 0, nonmember_mean_proof = 0;
+  witness_metrics member_metrics = {0}, nonmember_metrics = {0};
+  double add_level_commit_s[BENCH_MAX_DEPTH] = {0};
+  double delete_level_commit_s[BENCH_MAX_DEPTH] = {0};
+  double start, setup_s, fixture_init_s, add_s, delete_s;
   size_t matrix_elements, explicit_matrix_bytes, expanded_pp_ram;
-  size_t experiment_state_bytes;
-  double start, setup_s, build_s, add_s, member_prove_s, member_verify_s;
-  double delete_s, nonmember_prove_s, nonmember_verify_s;
   int stdout_copy = -1, null_output = -1;
   int print_csv_header = 1;
   int ret = EXIT_FAILURE;
@@ -171,10 +463,7 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  /*
-   * Upstream LaBRADOR emits diagnostic prose on stdout. Suppress it so this
-   * program's stdout is a directly usable CSV stream.
-   */
+  /* Upstream LaBRADOR writes diagnostics to stdout; keep stdout valid CSV. */
   fflush(stdout);
   stdout_copy = dup(STDOUT_FILENO);
   null_output = open("/dev/null", O_WRONLY);
@@ -183,18 +472,15 @@ int main(int argc, char **argv) {
     goto end;
 
   start = now_seconds();
-  if (acc_setup(&pp, experiment_n, setup_seed) != VT_OK)
+  if (acc_setup(&pp, universe_size, setup_seed) != VT_OK)
     goto end;
   setup_s = now_seconds() - start;
-  if (pp.tree.depth != 2U) {
-    fputs("benchmark experiment must have depth two\n", stderr);
+  if (pp.tree.depth != VA_TARGET_DEPTH) {
+    fprintf(stderr, "%s expected depth %d, got %zu\n", VA_PROFILE_NAME,
+            VA_TARGET_DEPTH, pp.tree.depth);
     goto end;
   }
 
-  start = now_seconds();
-  if (acc_eval(&pp, initial_set, 1, build_seed, &acc, &state) != VT_OK)
-    goto end;
-  build_s = now_seconds() - start;
   matrix_elements = public_matrix_ring_elements();
   if (!checked_mul(matrix_elements, VA_RING_DEGREE * QBYTES,
                    &explicit_matrix_bytes) ||
@@ -202,48 +488,35 @@ int main(int argc, char **argv) {
       !checked_add(expanded_pp_ram, sizeof(pp), &expanded_pp_ram) ||
       !checked_add(expanded_pp_ram,
                    (pp.tree.depth + 1U) * sizeof(vt_value),
-                   &expanded_pp_ram) ||
-      state_payload_bytes(&state, &experiment_state_bytes) != VT_OK)
+                   &expanded_pp_ram))
     goto end;
 
   start = now_seconds();
-  if (acc_upd(&pp, &acc, &state, x, ACC_MEMBERSHIP, &updated) != VT_OK)
+  if (path_fixture_init(&fixture, &pp, x, ACC_NONMEMBERSHIP, &root) !=
+      VT_OK)
+    goto end;
+  fixture_init_s = now_seconds() - start;
+
+  start = now_seconds();
+  if (path_fixture_update(&fixture, &pp, ACC_MEMBERSHIP, &root,
+                          add_level_commit_s) != VT_OK)
     goto end;
   add_s = now_seconds() - start;
-  acc = updated;
-
-  start = now_seconds();
-  if (acc_wit(&pp, &acc, &state, x, &member) != VT_OK)
-    goto end;
-  member_prove_s = now_seconds() - start;
-  start = now_seconds();
-  if (acc_verify(&pp, &acc, x, &member, ACC_MEMBERSHIP) != VT_OK)
-    goto end;
-  member_verify_s = now_seconds() - start;
-  if (acc_witness_encoded_size(&member, &member_wire) != VT_OK ||
-      mean_proof_bytes(&member, &member_mean_proof) != VT_OK ||
-      projected_witness_bytes(&member, VA_TARGET_DEPTH, &member_projected) !=
-          VT_OK)
+  if (witness_generate(&pp, &fixture, &member, &member_metrics) != VT_OK ||
+      witness_measure_and_check(&pp, &root, x, &member, ACC_MEMBERSHIP,
+                                &member_metrics) != VT_OK)
     goto end;
 
   start = now_seconds();
-  if (acc_upd(&pp, &acc, &state, x, ACC_NONMEMBERSHIP, &updated) != VT_OK)
+  if (path_fixture_update(&fixture, &pp, ACC_NONMEMBERSHIP, &root,
+                          delete_level_commit_s) != VT_OK)
     goto end;
   delete_s = now_seconds() - start;
-  acc = updated;
-
-  start = now_seconds();
-  if (acc_wit(&pp, &acc, &state, x, &nonmember) != VT_OK)
-    goto end;
-  nonmember_prove_s = now_seconds() - start;
-  start = now_seconds();
-  if (acc_verify(&pp, &acc, x, &nonmember, ACC_NONMEMBERSHIP) != VT_OK)
-    goto end;
-  nonmember_verify_s = now_seconds() - start;
-  if (acc_witness_encoded_size(&nonmember, &nonmember_wire) != VT_OK ||
-      mean_proof_bytes(&nonmember, &nonmember_mean_proof) != VT_OK ||
-      projected_witness_bytes(&nonmember, VA_TARGET_DEPTH,
-                              &nonmember_projected) != VT_OK)
+  if (witness_generate(&pp, &fixture, &nonmember,
+                       &nonmember_metrics) != VT_OK ||
+      witness_measure_and_check(&pp, &root, x, &nonmember,
+                                ACC_NONMEMBERSHIP,
+                                &nonmember_metrics) != VT_OK)
     goto end;
 
   fflush(stdout);
@@ -257,25 +530,35 @@ int main(int argc, char **argv) {
   if (print_csv_header)
     print_header();
   printf("%s,%" PRIu64 ",%d,%d,%d,%d,%d,%d,%d,%d,"
-         "%" PRIu64 ",%d,%" PRIu64 ",%d,%d,"
-         "%zu,%zu,%d,%zu,%zu,"
-         "%" PRIu64 ",%d,%" PRIu64 ",%zu,%zu,"
-         "%.9f,%.9f,%.9f,%.9f,%.9f,"
-         "%zu,%zu,%zu,"
-         "%.9f,%.9f,%.9f,"
-         "%zu,%zu,%zu\n",
+         "%" PRIu64 ",%d,%" PRIu64 ",%d,"
+         "%" PRIu64 ",%zu,%zu,%zu,%zu,%zu,%zu,%d,%zu,%zu,"
+         "%.9f,%.9f,%.9f",
          VA_PROFILE_NAME, VA_Q, VA_RING_DEGREE, VA_KAPPA, VA_ARITY,
          VA_INNER_WIDTH, VA_BLOCKS, VA_INNER_RANK, VA_OUTER_RANK,
          VA_RANDOMNESS_LEN, UINT64_C(1) << VA_INNER_BASE_LOG,
-         VA_INNER_DIGITS, UINT64_C(1) << VA_OUTER_BASE_LOG, VA_OUTER_DIGITS,
-         VA_HAT_T_LEN + VA_RANDOMNESS_LEN + VA_S_BLOCK_LEN,
+         VA_INNER_DIGITS, UINT64_C(1) << VA_OUTER_BASE_LOG,
+         VA_OUTER_DIGITS, universe_size, pp.tree.depth,
+         member.proof_count, member.intermediate_count,
+         (size_t)VA_HAT_T_LEN + VA_RANDOMNESS_LEN + VA_S_BLOCK_LEN,
          matrix_elements, explicit_matrix_bytes, VT_SEED_BYTES,
-         expanded_pp_ram, VA_COMMITMENT_BYTES, target_n, VA_TARGET_DEPTH,
-         experiment_n, pp.tree.depth, experiment_state_bytes, setup_s,
-         build_s, add_s, member_prove_s, member_verify_s, member_mean_proof,
-         member_wire, member_projected, delete_s, nonmember_prove_s,
-         nonmember_verify_s, nonmember_mean_proof, nonmember_wire,
-         nonmember_projected);
+         expanded_pp_ram, (size_t)VA_COMMITMENT_BYTES, setup_s,
+         fixture_init_s, add_s);
+  print_level_doubles(add_level_commit_s);
+  printf(",%.9f,%.9f,%zu,%zu,%zu", member_metrics.prove_s,
+         member_metrics.verify_s, member_metrics.proof_bytes,
+         member_metrics.commitment_bytes, member_metrics.wire_bytes);
+  print_level_doubles(member_metrics.level_prove_s);
+  print_level_doubles(member_metrics.level_verify_s);
+  print_level_sizes(member_metrics.level_proof_bytes);
+  printf(",%.9f", delete_s);
+  print_level_doubles(delete_level_commit_s);
+  printf(",%.9f,%.9f,%zu,%zu,%zu", nonmember_metrics.prove_s,
+         nonmember_metrics.verify_s, nonmember_metrics.proof_bytes,
+         nonmember_metrics.commitment_bytes, nonmember_metrics.wire_bytes);
+  print_level_doubles(nonmember_metrics.level_prove_s);
+  print_level_doubles(nonmember_metrics.level_verify_s);
+  print_level_sizes(nonmember_metrics.level_proof_bytes);
+  putchar('\n');
   ret = EXIT_SUCCESS;
 
 end:
@@ -290,7 +573,7 @@ end:
     fprintf(stderr, "%s benchmark failed\n", VA_PROFILE_NAME);
   acc_witness_clear(&nonmember);
   acc_witness_clear(&member);
-  acc_state_clear(&state);
+  path_fixture_clear(&fixture);
   acc_public_parameters_clear(&pp);
   return ret;
 }
