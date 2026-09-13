@@ -23,6 +23,10 @@ The current milestones implement:
 - bottom-up tree construction and transactional path-only updates;
 - the paper state layout `st_VT = (Node, Leaf)`, with cached node messages,
   commitments, and VC prover states.
+- the accumulator-layer `Acc.Setup`, `Acc.Eval`, `Acc.Upd`, `Acc.Wit`, and
+  `Acc.Verify` algorithms;
+- membership and non-membership witnesses containing exactly `d-1`
+  intermediate commitments and `d` non-interactive LaBRADOR opening proofs.
 
 LaBRADOR is pinned as an Apache-2.0 Git submodule under
 `third_party/labrador`.
@@ -59,9 +63,19 @@ Run the full non-interactive proof (substantially slower) with:
 make prove
 ```
 
+Run the end-to-end depth-two accumulator test with:
+
+```sh
+make test-accumulator
+```
+
+This generates and verifies both a membership and a non-membership witness.
+It is intentionally separate from `make test` because it invokes four complete
+non-interactive LaBRADOR proofs.
+
 The proof object is currently the upstream in-memory `composite` structure.
-Canonical wire serialization and the full accumulator tree are subsequent
-milestones.
+Canonical wire serialization, persistence, and comprehensive P2 benchmarking
+are subsequent milestones.
 
 The build leaves the pinned submodule unchanged. It applies
 `patches/labrador-mixed-constraints.patch` to a generated source copy because
