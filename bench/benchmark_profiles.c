@@ -13,6 +13,63 @@
 
 enum { VAW1_HEADER_BYTES = 64 };
 
+static int checked_add(size_t left, size_t right, size_t *result) {
+  if (result == NULL || left > SIZE_MAX - right)
+    return 0;
+  *result = left + right;
+  return 1;
+}
+
+static int checked_mul(size_t left, size_t right, size_t *result) {
+  if (result == NULL || (left != 0 && right > SIZE_MAX / left))
+    return 0;
+  *result = left * right;
+  return 1;
+}
+
+static size_t public_matrix_ring_elements(void) {
+  return (size_t)VA_INNER_RANK * VA_S_BLOCK_LEN +
+         (size_t)VA_OUTER_RANK * VA_HAT_T_LEN +
+         (size_t)VA_OUTER_RANK * VA_RANDOMNESS_LEN;
+}
+
+/*
+ * Count allocated payload bytes, excluding allocator metadata and padding.
+ * This is the measured experiment state, not a projection to N_max.
+ */
+static int state_payload_bytes(const acc_state *state, size_t *bytes) {
+  size_t total = sizeof(*state), term, level, index;
+  if (state == NULL || bytes == NULL || state->tree.nodes == NULL ||
+      state->tree.node_counts == NULL)
+    return VT_ERR_ARGUMENT;
+  if (!checked_add(total, state->set_bytes, &total) ||
+      !checked_mul((size_t)state->tree.universe_size, sizeof(vt_leaf),
+                   &term) ||
+      !checked_add(total, term, &total) ||
+      !checked_mul(state->tree.depth, sizeof(size_t), &term) ||
+      !checked_add(total, term, &total) ||
+      !checked_mul(state->tree.depth, sizeof(vt_node *), &term) ||
+      !checked_add(total, term, &total))
+    return VT_ERR_OVERFLOW;
+  for (level = 0; level < state->tree.depth; ++level) {
+    if (!checked_mul(state->tree.node_counts[level], sizeof(vt_node), &term) ||
+        !checked_add(total, term, &total))
+      return VT_ERR_OVERFLOW;
+    for (index = 0; index < state->tree.node_counts[level]; ++index) {
+      const size_t polynomial_count =
+          (size_t)VA_BLOCKS * VA_S_BLOCK_LEN + VA_HAT_T_LEN +
+          VA_RANDOMNESS_LEN;
+      if (!checked_mul(VA_MESSAGE_SCALARS, sizeof(uint32_t), &term) ||
+          !checked_add(total, term, &total) ||
+          !checked_mul(polynomial_count, sizeof(poly), &term) ||
+          !checked_add(total, term, &total))
+        return VT_ERR_OVERFLOW;
+    }
+  }
+  *bytes = total;
+  return VT_OK;
+}
+
 static double now_seconds(void) {
   struct timespec value;
   if (clock_gettime(CLOCK_MONOTONIC, &value) != 0)
@@ -72,12 +129,15 @@ static int projected_witness_bytes(const acc_witness *measured,
 
 static void print_header(void) {
   puts("profile,q,ell,kappa,L,m,r,n0,n1,mu,b0,delta0,b1,delta1,"
-       "raw_witness_ring_elements,commitment_bytes,target_N,target_depth,"
-       "experiment_N,experiment_depth,setup_s,build_s,add_s,member_prove_s,"
-       "member_verify_s,member_mean_proof_bytes,member_wire_bytes,"
-       "member_target_projected_bytes,delete_s,nonmember_prove_s,"
-       "nonmember_verify_s,nonmember_mean_proof_bytes,nonmember_wire_bytes,"
-       "nonmember_target_projected_bytes");
+       "raw_witness_ring_elements,public_matrix_ring_elements,"
+       "public_matrix_explicit_bytes,setup_seed_bytes,"
+       "public_parameters_expanded_ram_bytes,accumulator_value_bytes,"
+       "target_N,target_depth,experiment_N,experiment_depth,"
+       "experiment_state_payload_bytes,setup_s,build_s,add_s,"
+       "member_prove_s,member_verify_s,member_mean_proof_bytes,"
+       "member_wire_bytes,member_target_projected_bytes,delete_s,"
+       "nonmember_prove_s,nonmember_verify_s,nonmember_mean_proof_bytes,"
+       "nonmember_wire_bytes,nonmember_target_projected_bytes");
 }
 
 int main(int argc, char **argv) {
@@ -96,6 +156,8 @@ int main(int argc, char **argv) {
   size_t member_wire = 0, nonmember_wire = 0;
   size_t member_projected = 0, nonmember_projected = 0;
   size_t member_mean_proof = 0, nonmember_mean_proof = 0;
+  size_t matrix_elements, explicit_matrix_bytes, expanded_pp_ram;
+  size_t experiment_state_bytes;
   double start, setup_s, build_s, add_s, member_prove_s, member_verify_s;
   double delete_s, nonmember_prove_s, nonmember_verify_s;
   int stdout_copy = -1, null_output = -1;
@@ -133,6 +195,16 @@ int main(int argc, char **argv) {
   if (acc_eval(&pp, initial_set, 1, build_seed, &acc, &state) != VT_OK)
     goto end;
   build_s = now_seconds() - start;
+  matrix_elements = public_matrix_ring_elements();
+  if (!checked_mul(matrix_elements, VA_RING_DEGREE * QBYTES,
+                   &explicit_matrix_bytes) ||
+      !checked_mul(matrix_elements, sizeof(polx), &expanded_pp_ram) ||
+      !checked_add(expanded_pp_ram, sizeof(pp), &expanded_pp_ram) ||
+      !checked_add(expanded_pp_ram,
+                   (pp.tree.depth + 1U) * sizeof(vt_value),
+                   &expanded_pp_ram) ||
+      state_payload_bytes(&state, &experiment_state_bytes) != VT_OK)
+    goto end;
 
   start = now_seconds();
   if (acc_upd(&pp, &acc, &state, x, ACC_MEMBERSHIP, &updated) != VT_OK)
@@ -184,20 +256,26 @@ int main(int argc, char **argv) {
 
   if (print_csv_header)
     print_header();
-  printf("%s,%" PRIu64 ",%d,%d,%d,%d,%d,%d,%d,%d,%" PRIu64
-         ",%d,%" PRIu64 ",%d,%d,%zu,%" PRIu64 ",%d,%" PRIu64
-         ",%zu,%.9f,%.9f,%.9f,%.9f,%.9f,%zu,%zu,%zu,%.9f,%.9f,%.9f,"
+  printf("%s,%" PRIu64 ",%d,%d,%d,%d,%d,%d,%d,%d,"
+         "%" PRIu64 ",%d,%" PRIu64 ",%d,%d,"
+         "%zu,%zu,%d,%zu,%zu,"
+         "%" PRIu64 ",%d,%" PRIu64 ",%zu,%zu,"
+         "%.9f,%.9f,%.9f,%.9f,%.9f,"
+         "%zu,%zu,%zu,"
+         "%.9f,%.9f,%.9f,"
          "%zu,%zu,%zu\n",
          VA_PROFILE_NAME, VA_Q, VA_RING_DEGREE, VA_KAPPA, VA_ARITY,
          VA_INNER_WIDTH, VA_BLOCKS, VA_INNER_RANK, VA_OUTER_RANK,
          VA_RANDOMNESS_LEN, UINT64_C(1) << VA_INNER_BASE_LOG,
          VA_INNER_DIGITS, UINT64_C(1) << VA_OUTER_BASE_LOG, VA_OUTER_DIGITS,
          VA_HAT_T_LEN + VA_RANDOMNESS_LEN + VA_S_BLOCK_LEN,
-         VA_COMMITMENT_BYTES, target_n, VA_TARGET_DEPTH, experiment_n,
-         pp.tree.depth, setup_s, build_s, add_s, member_prove_s,
-         member_verify_s, member_mean_proof, member_wire, member_projected,
-         delete_s, nonmember_prove_s, nonmember_verify_s,
-         nonmember_mean_proof, nonmember_wire, nonmember_projected);
+         matrix_elements, explicit_matrix_bytes, VT_SEED_BYTES,
+         expanded_pp_ram, VA_COMMITMENT_BYTES, target_n, VA_TARGET_DEPTH,
+         experiment_n, pp.tree.depth, experiment_state_bytes, setup_s,
+         build_s, add_s, member_prove_s, member_verify_s, member_mean_proof,
+         member_wire, member_projected, delete_s, nonmember_prove_s,
+         nonmember_verify_s, nonmember_mean_proof, nonmember_wire,
+         nonmember_projected);
   ret = EXIT_SUCCESS;
 
 end:

@@ -100,6 +100,13 @@ canonical byte length of the real proofs produced by that profile. It does not
 claim to execute a dense build over `2^32` position-dependent leaves. See
 [`docs/benchmarking.md`](docs/benchmarking.md) for the methodology.
 
+For a publication run with ten repetitions plus CPU, compiler, OS, and commit
+metadata, use:
+
+```sh
+./scripts/run_benchmarks.sh 10
+```
+
 The byte-level format is documented in
 [`docs/witness-wire-format.md`](docs/witness-wire-format.md).
 
