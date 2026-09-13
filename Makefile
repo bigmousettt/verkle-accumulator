@@ -16,7 +16,8 @@ LABRADOR_SOURCES := \
 	$(LABRADOR_DIR)/fips202.c $(LABRADOR_DIR)/randombytes.c \
 	$(LABRADOR_DIR)/cpucycles.c
 
-.PHONY: all test test-accumulator test-profiles prove benchmark-profiles clean
+.PHONY: all test test-accumulator test-profiles prove benchmark-profiles \
+	print-build-config clean
 all: build/test_vc build/test_tree build/test_accumulator build/prove_opening
 build:
 	mkdir -p $@
@@ -67,6 +68,9 @@ benchmark-profiles: build/benchmark_p1 build/benchmark_p2 build/benchmark_p3
 	./build/benchmark_p1
 	./build/benchmark_p2 --no-header
 	./build/benchmark_p3 --no-header
+print-build-config:
+	@printf 'make_cc=%s\nmake_cflags=%s\nmake_ldlibs=%s\n' \
+		'$(CC)' '$(CFLAGS)' '$(LDLIBS)'
 clean:
 	rm -f build/test_vc build/test_tree build/test_accumulator \
 		build/prove_opening build/test_vc_p1 build/test_vc_p2 \
