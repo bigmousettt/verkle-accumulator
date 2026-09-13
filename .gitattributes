@@ -1,1 +1,4 @@
-*.patch -whitespace
+# Keep executable scripts and build inputs portable across Windows Git and WSL.
+*.sh text eol=lf
+Makefile text eol=lf
+*.patch text eol=lf
