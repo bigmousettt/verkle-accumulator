@@ -1,85 +1,139 @@
-# P1/P2/P3 benchmark methodology
+# P1/P2/P3 target-depth benchmark methodology
 
-The benchmark keeps the accumulator construction unchanged. In particular,
-an absent position `x` contains `H_leaf(0, x)`, not a shared empty-leaf value.
-Consequently, building the current construction is linear in the universe
-size and a dense `N_max = 2^32` build is not presented as an executed result.
+The benchmark keeps the accumulator construction and the candidate universe
+size unchanged:
 
-## Reproducing the experiment
+| Profile | Arity `L` | Universe size | Executed path depth |
+|---|---:|---:|---:|
+| P1 | 256 | `2^32` | 4 |
+| P2 | 4,096 | `2^32` | 3 |
+| P3 | 65,536 | `2^32` | 2 |
 
-The three binaries are compiled independently, so every translation unit
-(including the VAW1 codec) sees the same profile constants.
+P1 and P2 results are not obtained by scaling a depth-two result. The
+benchmark generates, serializes, and verifies four actual opening proofs for
+P1, three for P2, and two for P3.
+
+## Scope
+
+The current construction assigns every absent position the distinct value
+`H_leaf(0, x)`. A dense `VT.Build` over `2^32` positions is therefore an
+offline-scale, `N`-dependent operation. It is intentionally outside this
+benchmark.
+
+Instead, the program materializes the one authentication path needed for an
+opening at `x = 2^32 - 1`. Each path node has the full profile-specific message
+vector, the selected coordinate has exactly the value required by the scheme,
+and unopened coordinates use a deterministic public level-dependent fixture
+value. The nodes are committed bottom-up using the production VC
+implementation. This produces a valid target-depth opening chain for timing
+and serialization, but the fixture root is not claimed to equal the root that
+a complete `VT.Build` over all `2^32` position-dependent leaves would produce.
+
+The benchmark then executes:
+
+1. `VT.Setup` for the real universe size `2^32`;
+2. target-depth path initialization in the non-membership state;
+3. an addition by recommitting all nodes on that path;
+4. one real non-interactive LaBRADOR proof per level;
+5. aggregate verification and exact VAW1 encode/decode verification;
+6. a deletion by recommitting all path nodes; and
+7. the corresponding non-membership proofs and checks.
+
+This measures quantities determined by the VC parameters and authentication
+path depth. It does **not** measure `VT.Build`, complete tree storage, or any
+other quantity that grows with the number of materialized leaves/nodes.
+
+The complete `VT.Build`, `VT.Upd`, accumulator witness, and tamper-rejection
+logic remains covered by `tests/test_tree.c` and `tests/test_accumulator.c` on
+tractable universes.
+
+## Reproduction
+
+The three binaries are compiled independently, so every translation unit,
+including the VAW1 codec, uses one consistent profile.
 
 ```sh
+make -s test
+make -s test-accumulator
 make -s test-profiles
 make -s benchmark-profiles > benchmark-results.csv
 ```
 
-For a publication run, the bundled harness performs ten independent
-repetitions by default and records the CPU, compiler, operating system, and Git
-commit next to the CSV:
+For a publication run, the harness performs repeated measurements and records
+the CPU, compiler, operating system, and Git commit alongside the CSV:
 
 ```sh
-./scripts/run_benchmarks.sh 10
+./scripts/run_benchmarks.sh 30
 ```
 
-Disable unrelated workloads while collecting the final results. Report at
-least the median and a dispersion measure for every timing column.
+Disable unrelated workloads and fixed-frequency/power-policy changes while
+collecting final results. Report at least the median and a dispersion measure
+for each timing column.
 
-## Executed versus projected values
+## CSV fields
 
-For each profile, the complete executed experiment uses `N_exp = L + 1`.
-This is the smallest universe that exercises a two-level tree and therefore
-executes three real node commitments (two leaf-parent nodes and the root).
-It measures:
+### Parameters and static sizes
 
-- `Acc.Setup` / `VT.Setup`;
-- `Acc.Eval` / `VT.Build`;
-- membership addition through `Acc.Upd` / `VT.Upd`;
-- generation, verification, and canonical VAW1 size of a membership witness;
-- deletion through `Acc.Upd` / `VT.Upd`;
-- generation, verification, and canonical VAW1 size of a non-membership
-  witness.
+- `profile` through `delta1` identify the compiled parameter set.
+- `universe_size` is `2^32`; it is used by `VT.Setup` to derive the real tree
+  depth, but the full universe is not materialized.
+- `path_depth`, `proof_count`, and `intermediate_commitment_count` are the
+  values actually executed: `(4,4,3)`, `(3,3,2)`, and `(2,2,1)` for P1, P2,
+  and P3 respectively.
+- `raw_witness_ring_elements` is
+  `n0*delta1*r + mu + m*delta0` for one coordinate opening.
+- `public_matrix_ring_elements` counts elements of `R_q` in `A`, `B`, and
+  `E`.
+- `public_matrix_explicit_bytes` stores every public matrix coefficient as a
+  32-bit canonical residue:
+  `(n0*m*delta0 + n1*n0*delta1*r + n1*mu) * ell * 4`.
+- `setup_seed_bytes` is the 32-byte seed sufficient to regenerate the public
+  matrices when the profile and domain separators are fixed.
+- `public_parameters_expanded_ram_bytes` is the C payload of the expanded CRT
+  matrices, parameter object, and cached public empty values. It excludes
+  allocator metadata and must not be reported as communication size.
+- `accumulator_value_bytes` is the canonical root commitment size.
 
-## Size conventions
+### Timings
 
-The CSV exposes the following distinct size measures so that comparisons do
-not mix serialization and implementation memory:
+- `setup_s` is the real `VT.Setup` time for universe size `2^32`.
+- `path_fixture_init_s` creates and commits the selected target-depth path. It
+  is a benchmark fixture cost, not `VT.Build`.
+- `add_path_update_s` and `delete_path_update_s` recommit all nodes on the
+  selected path, bottom-up. They measure the cryptographic path-update work,
+  not full-state lookup, persistence, or I/O.
+- `*_level1_commit_s` through `*_level4_commit_s` give the same update broken
+  down by node level. Level 1 is the root and level `d` is the leaf-parent.
+- `member_prove_s` and `nonmember_prove_s` include relation opening and all
+  `d` non-interactive LaBRADOR proofs.
+- `member_verify_s` and `nonmember_verify_s` are one aggregate
+  `Acc.Verify`-equivalent path verification. The per-level verification fields
+  separately time each LaBRADOR verifier invocation.
+- Per-level fields beyond a profile's actual depth are zero and must be
+  ignored.
 
-- `public_matrix_ring_elements` is the number of elements of `R_q` in
-  `A`, `B`, and `E`;
-- `public_matrix_explicit_bytes` stores every matrix coefficient as one
-  32-bit canonical residue, namely
-  `(n0*m*delta0 + n1*n0*delta1*r + n1*mu) * ell * 4`;
-- `setup_seed_bytes` is 32 bytes. Given the agreed profile and hash domains,
-  this is sufficient for `VT.Setup` to regenerate all three matrices;
-- `public_parameters_expanded_ram_bytes` is the actual C payload for the
-  expanded CRT matrices, the public-parameter object, and cached empty values.
-  It excludes allocator metadata;
-- `accumulator_value_bytes` is the canonical root commitment size;
-- `experiment_state_payload_bytes` counts the allocated C payload of the
-  fully materialized state at `N_exp`, excluding allocator metadata;
-- `member_wire_bytes` and `nonmember_wire_bytes` are exact complete VAW1
-  serializations, not LaBRADOR's floating-point estimates.
+### Exact witness sizes
 
-For public-parameter comparisons, report both the explicit-matrix and seeded
-figures and state which convention the compared scheme uses. The expanded RAM
-figure is an implementation-memory measurement and must not be presented as
-communication size.
+- `*_levelK_proof_bytes` is the canonical encoded size of the real composite
+  LaBRADOR proof generated at that level.
+- `*_proof_bytes` is the sum of those `d` proof sizes.
+- `*_commitment_bytes` is `(d - 1) * 6400`, the exact size of the intermediate
+  commitments carried by the authentication path.
+- `*_wire_bytes` is the exact complete VAW1 serialization:
 
-The columns ending in `_target_projected_bytes` refer to `N_max = 2^32`.
-They are path-size projections, not dense-build measurements. The projection
-uses
+  ```text
+  64-byte VAW1 header + intermediate commitments + all composite proofs
+  ```
 
-```text
-64 + (d - 1) * commitment_bytes + d * mean_composite_proof_bytes
-```
+The wire size is obtained from the actual target-depth witness, encoded,
+decoded, and verified again. There are no projected witness-size columns.
+Membership and non-membership have the same structure but are both measured
+because rejection sampling can make individual LaBRADOR proof lengths vary.
 
-where 64 is the VAW1 header, each commitment is exactly 6,400 bytes, and the
-mean proof length is computed from the exact canonical sizes of the two real
-LaBRADOR proofs in the executed depth-two witness. All levels use the same VC
-relation dimensions. The target depths are P1 = 4, P2 = 3, and P3 = 2.
+## Interpretation boundary
 
-Timing projections are deliberately omitted: proof time can be multiplied by
-the path length as a rough model, but it is not an executed end-to-end timing
-and may miss cache and parallelism effects.
+The target-depth benchmark is appropriate for comparing accumulator value
+size, public-parameter size, membership/non-membership witness size, proof
+time, verification time, and the cryptographic part of a single-path update.
+It cannot support claims about full `VT.Build` time, total tree memory, batch
+construction throughput, database lookup cost, or update I/O at `N = 2^32`.
