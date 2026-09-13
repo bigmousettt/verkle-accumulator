@@ -27,6 +27,8 @@ The current milestones implement:
   `Acc.Verify` algorithms;
 - membership and non-membership witnesses containing exactly `d-1`
   intermediate commitments and `d` non-interactive LaBRADOR opening proofs.
+- a canonical, versioned accumulator-witness wire format with strict decoding
+  bounds and file persistence helpers.
 
 LaBRADOR is pinned as an Apache-2.0 Git submodule under
 `third_party/labrador`.
@@ -73,9 +75,12 @@ This generates and verifies both a membership and a non-membership witness.
 It is intentionally separate from `make test` because it invokes four complete
 non-interactive LaBRADOR proofs.
 
-The proof object is currently the upstream in-memory `composite` structure.
-Canonical wire serialization, persistence, and comprehensive P2 benchmarking
-are subsequent milestones.
+The in-memory proof object remains the upstream `composite` structure. The
+`acc_witness_encode` and `acc_witness_decode` APIs convert the complete path
+witness to and from the portable `VAW1` format; `acc_witness_write_file` and
+`acc_witness_read_file` provide persistence. Comprehensive P2 benchmarking is
+a subsequent milestone. The byte-level format is documented in
+[`docs/witness-wire-format.md`](docs/witness-wire-format.md).
 
 The build leaves the pinned submodule unchanged. It applies
 `patches/labrador-mixed-constraints.patch` to a generated source copy because

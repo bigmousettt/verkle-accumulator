@@ -8,7 +8,9 @@
 
 enum {
   ACC_NONMEMBERSHIP = 0,
-  ACC_MEMBERSHIP = 1
+  ACC_MEMBERSHIP = 1,
+  ACC_ERR_FORMAT = 8,
+  ACC_ERR_IO = 9
 };
 
 typedef va_commitment acc_value;
@@ -56,6 +58,20 @@ int acc_verify(const acc_public_parameters *pp, const acc_value *acc,
 
 int acc_contains(const acc_state *state, uint64_t x);
 double acc_witness_estimated_kib(const acc_witness *proof_bundle);
+
+/* Canonical, versioned wire format. The encoded form contains no pointers or
+ * native-size integers and may be persisted or sent to another verifier. */
+int acc_witness_encoded_size(const acc_witness *proof_bundle, size_t *size);
+int acc_witness_encode(uint8_t *out, size_t out_len, size_t *written,
+                       const acc_witness *proof_bundle);
+int acc_witness_decode(const acc_public_parameters *pp,
+                       acc_witness *proof_bundle, const uint8_t *in,
+                       size_t in_len);
+int acc_witness_write_file(const char *path,
+                           const acc_witness *proof_bundle);
+int acc_witness_read_file(const acc_public_parameters *pp, const char *path,
+                          acc_witness *proof_bundle);
+
 void acc_witness_clear(acc_witness *proof_bundle);
 void acc_state_clear(acc_state *state);
 
