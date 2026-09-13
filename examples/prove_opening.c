@@ -13,6 +13,7 @@ int main(void) {
   va_opening_relation opening = {0};
   prncplstmnt verifier_statement = {0};
   composite composite_proof = {0};
+  const size_t coordinate = VA_ARITY / 2U + 3U;
   size_t i;
   int ret = EXIT_FAILURE;
 
@@ -23,18 +24,19 @@ int main(void) {
   va_default_seeds(a, b, e);
   if (va_context_init(&ctx, a, b, e) != 0 ||
       va_commit(&ctx, message, randomness_seed, &vc_commitment, &state) != 0 ||
-      va_open(&opening, &ctx, &vc_commitment, &state, message, 1703) != 0 ||
+      va_open(&opening, &ctx, &vc_commitment, &state, message, coordinate) !=
+          0 ||
       va_relation_verify(&opening) != 0)
     goto end;
 
   puts("Generating a non-interactive composite LaBRADOR proof...");
   if (va_prove(&composite_proof, &opening) != 0 ||
-      va_statement_init(&verifier_statement, &ctx, &vc_commitment, 1703,
+      va_statement_init(&verifier_statement, &ctx, &vc_commitment, coordinate,
                         opening.value) != 0 ||
       va_verify(&composite_proof, &verifier_statement) != 0)
     goto end;
-  printf("Proof verified; estimated encoded size: %.2f KB\n",
-         composite_proof.size);
+  printf("%s proof verified; estimated encoded size: %.2f KiB\n",
+         VA_PROFILE_NAME, composite_proof.size);
   ret = EXIT_SUCCESS;
 
 end:

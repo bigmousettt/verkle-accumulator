@@ -565,6 +565,18 @@ static void writer_composite(wire_writer *writer, const composite *bundle) {
   writer_witness(writer, &bundle->owt);
 }
 
+int acc_composite_encoded_size(const composite *composite_proof,
+                               size_t *size) {
+  wire_writer writer = {0};
+  if (size == NULL || !composite_valid(composite_proof))
+    return VT_ERR_ARGUMENT;
+  writer_composite(&writer, composite_proof);
+  if (writer.failed || writer.offset > ACC_WIRE_MAX_BYTES)
+    return VT_ERR_OVERFLOW;
+  *size = writer.offset;
+  return VT_OK;
+}
+
 static int reader_composite(wire_reader *reader, composite *bundle) {
   size_t i;
   int ret;

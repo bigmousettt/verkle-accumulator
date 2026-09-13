@@ -16,7 +16,7 @@ LABRADOR_SOURCES := \
 	$(LABRADOR_DIR)/fips202.c $(LABRADOR_DIR)/randombytes.c \
 	$(LABRADOR_DIR)/cpucycles.c
 
-.PHONY: all test test-accumulator prove clean
+.PHONY: all test test-accumulator test-profiles prove benchmark-profiles clean
 all: build/test_vc build/test_tree build/test_accumulator build/prove_opening
 build:
 	mkdir -p $@
@@ -37,13 +37,38 @@ build/test_accumulator: tests/test_accumulator.c src/accumulator.c src/wire.c sr
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 build/prove_opening: examples/prove_opening.c src/vc.c $(LABRADOR_SOURCES) | build
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+build/test_vc_p1: tests/test_vc.c src/vc.c $(LABRADOR_SOURCES) | build
+	$(CC) $(CFLAGS) -DVA_PROFILE_P1 $^ -o $@ $(LDLIBS)
+build/test_vc_p2: tests/test_vc.c src/vc.c $(LABRADOR_SOURCES) | build
+	$(CC) $(CFLAGS) -DVA_PROFILE_P2 $^ -o $@ $(LDLIBS)
+build/test_vc_p3: tests/test_vc.c src/vc.c $(LABRADOR_SOURCES) | build
+	$(CC) $(CFLAGS) -DVA_PROFILE_P3 $^ -o $@ $(LDLIBS)
+build/benchmark_p1: bench/benchmark_profiles.c src/accumulator.c src/wire.c \
+		src/tree.c src/vc.c $(LABRADOR_SOURCES) | build
+	$(CC) $(CFLAGS) -DVA_PROFILE_P1 $^ -o $@ $(LDLIBS)
+build/benchmark_p2: bench/benchmark_profiles.c src/accumulator.c src/wire.c \
+		src/tree.c src/vc.c $(LABRADOR_SOURCES) | build
+	$(CC) $(CFLAGS) -DVA_PROFILE_P2 $^ -o $@ $(LDLIBS)
+build/benchmark_p3: bench/benchmark_profiles.c src/accumulator.c src/wire.c \
+		src/tree.c src/vc.c $(LABRADOR_SOURCES) | build
+	$(CC) $(CFLAGS) -DVA_PROFILE_P3 $^ -o $@ $(LDLIBS)
 test: build/test_vc build/test_tree
 	./build/test_vc
 	./build/test_tree
 test-accumulator: build/test_accumulator
 	./build/test_accumulator
+test-profiles: build/test_vc_p1 build/test_vc_p2 build/test_vc_p3
+	./build/test_vc_p1
+	./build/test_vc_p2
+	./build/test_vc_p3
 prove: build/prove_opening
 	./build/prove_opening
+benchmark-profiles: build/benchmark_p1 build/benchmark_p2 build/benchmark_p3
+	./build/benchmark_p1
+	./build/benchmark_p2 --no-header
+	./build/benchmark_p3 --no-header
 clean:
 	rm -f build/test_vc build/test_tree build/test_accumulator \
-		build/prove_opening
+		build/prove_opening build/test_vc_p1 build/test_vc_p2 \
+		build/test_vc_p3 build/benchmark_p1 build/benchmark_p2 \
+		build/benchmark_p3

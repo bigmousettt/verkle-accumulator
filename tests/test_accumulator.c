@@ -19,6 +19,7 @@ int main(void) {
   uint8_t *encoded = NULL;
   uint8_t *encoded_again = NULL;
   size_t encoded_size = 0, written = 0, rewritten = 0;
+  size_t proof_bytes = 0, level;
   static const char witness_path[] = "build/test-member.vaw";
   int ret = EXIT_FAILURE;
 
@@ -41,6 +42,19 @@ int main(void) {
          acc_witness_estimated_kib(&member_witness));
 
   if (acc_witness_encoded_size(&member_witness, &encoded_size) != VT_OK)
+    goto end;
+  for (level = 0; level < member_witness.proof_count; ++level) {
+    size_t current;
+    if (acc_composite_encoded_size(&member_witness.opening_proofs[level],
+                                   &current) != VT_OK ||
+        proof_bytes > SIZE_MAX - current)
+      goto end;
+    proof_bytes += current;
+  }
+  if (encoded_size != 64U +
+                          member_witness.intermediate_count *
+                              VA_COMMITMENT_BYTES +
+                          proof_bytes)
     goto end;
   encoded = malloc(encoded_size);
   encoded_again = malloc(encoded_size);

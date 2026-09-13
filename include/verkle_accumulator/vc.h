@@ -7,13 +7,48 @@
 #include "chihuahua.h"
 #include "pack.h"
 
-/* VA_ARITY is not named L because LaBRADOR uses L for its CRT limbs. */
+/*
+ * Select exactly one benchmark profile at compile time. P2 is the default so
+ * existing applications keep their original parameters. VA_ARITY is not
+ * named L because LaBRADOR uses L for its CRT limbs.
+ */
+#if (defined(VA_PROFILE_P1) + defined(VA_PROFILE_P2) + \
+     defined(VA_PROFILE_P3)) > 1
+#error "select at most one VA_PROFILE_P1, VA_PROFILE_P2, or VA_PROFILE_P3"
+#endif
+
+#if defined(VA_PROFILE_P1)
+#define VA_PROFILE_NAME "P1"
 enum {
-  VA_RING_DEGREE = N,
-  VA_KAPPA = 8,
+  VA_PROFILE_ID = 1,
+  VA_ARITY = 256,
+  VA_BLOCKS = 2,
+  VA_INNER_WIDTH = 16,
+  VA_TARGET_DEPTH = 4
+};
+#elif defined(VA_PROFILE_P3)
+#define VA_PROFILE_NAME "P3"
+enum {
+  VA_PROFILE_ID = 3,
+  VA_ARITY = 65536,
+  VA_BLOCKS = 32,
+  VA_INNER_WIDTH = 256,
+  VA_TARGET_DEPTH = 2
+};
+#else
+#define VA_PROFILE_NAME "P2"
+enum {
+  VA_PROFILE_ID = 2,
   VA_ARITY = 4096,
   VA_BLOCKS = 8,
   VA_INNER_WIDTH = 64,
+  VA_TARGET_DEPTH = 3
+};
+#endif
+
+enum {
+  VA_RING_DEGREE = N,
+  VA_KAPPA = 8,
   VA_INNER_RANK = 18,
   VA_OUTER_RANK = 25,
   VA_RANDOMNESS_LEN = 53,
@@ -31,6 +66,10 @@ enum {
 #define VA_MESSAGE_SCALARS ((size_t)VA_ARITY * VA_KAPPA)
 #define VA_COMMITMENT_BYTES \
   ((size_t)VA_OUTER_RANK * VA_RING_DEGREE * QBYTES)
+
+_Static_assert(VA_KAPPA * VA_ARITY ==
+                   VA_INNER_WIDTH * VA_BLOCKS * VA_RING_DEGREE,
+               "profile must satisfy kappa * L = m * r * ell");
 
 typedef struct {
   uint8_t a_seed[16];

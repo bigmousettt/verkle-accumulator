@@ -1,13 +1,19 @@
 # Verkle accumulator
 
-Experimental implementation of the P2 Verkle-node vector commitment and its
-non-interactive LaBRADOR coordinate-opening relation.
+Experimental implementation of the P1/P2/P3 Verkle-node vector commitments
+and their non-interactive LaBRADOR coordinate-opening relation. P2 remains the
+default build profile.
 
 The current milestones implement:
 
 - `R_q = Z_q[X]/(X^64 + 1)`, with `q = 2^32 - 99`;
-- P2 parameters `(kappa, arity, m, r, n0, n1, mu) =
-  (8, 4096, 64, 8, 18, 25, 53)`;
+- compile-time benchmark profiles:
+
+  | profile | `L` | `m` | `r` | `n0` | `n1` | `mu` | depth at `2^32` |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | P1 | 256 | 16 | 2 | 18 | 25 | 53 | 4 |
+  | P2 | 4096 | 64 | 8 | 18 | 25 | 53 | 3 |
+  | P3 | 65536 | 256 | 32 | 18 | 25 | 53 | 2 |
 - seed-expanded `A`, `B`, and `E` matrices;
 - two-level commitment `u = B * hat(t) + E * randomness`;
 - a coordinate-opening relation enforcing 25 outer, 18 inner, and 8
@@ -53,10 +59,12 @@ recommitted, and rejects an illegal repeated addition.
 
 The implementation uses a logically full fixed-depth tree and materializes
 only nodes whose subtree intersects `X = [N]`. Coordinates outside `X` use the
-public level-dependent values `epsilon_t`. This keeps all paths at exactly
-`d = ceil(log_4096(N))` levels while avoiding Ethereum's stem/suffix semantics.
-The build algorithm remains linear in `N`: constructing the complete P2 tree
-for `N = 2^32` is an offline-scale operation, so tests and profiling should use
+public level-dependent values `epsilon_t`. Every in-range empty leaf remains
+the position-dependent value `H_leaf(0, x)`; the benchmark does not replace
+these values with a common empty leaf. This keeps all paths at exactly
+`d = ceil(log_L(N))` levels while avoiding Ethereum's stem/suffix semantics.
+The build algorithm remains linear in `N`: constructing a complete tree for
+`N = 2^32` is an offline-scale operation, so tests and profiling should use
 smaller `N` before adding persistent/out-of-core node storage.
 
 Run the full non-interactive proof (substantially slower) with:
@@ -78,8 +86,21 @@ non-interactive LaBRADOR proofs.
 The in-memory proof object remains the upstream `composite` structure. The
 `acc_witness_encode` and `acc_witness_decode` APIs convert the complete path
 witness to and from the portable `VAW1` format; `acc_witness_write_file` and
-`acc_witness_read_file` provide persistence. Comprehensive P2 benchmarking is
-a subsequent milestone. The byte-level format is documented in
+`acc_witness_read_file` provide persistence. P1/P2/P3 benchmarking is
+available through:
+
+```sh
+make -s benchmark-profiles > benchmark-results.csv
+```
+
+Each profile executes a complete depth-two experiment at `N = L + 1`, covering
+setup, build, addition, deletion, and both witness types. It also reports a
+separately labelled path-size projection at `N_max = 2^32`, using the exact
+canonical byte length of the real proofs produced by that profile. It does not
+claim to execute a dense build over `2^32` position-dependent leaves. See
+[`docs/benchmarking.md`](docs/benchmarking.md) for the methodology.
+
+The byte-level format is documented in
 [`docs/witness-wire-format.md`](docs/witness-wire-format.md).
 
 The build leaves the pinned submodule unchanged. It applies
