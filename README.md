@@ -93,11 +93,12 @@ available through:
 make -s benchmark-profiles > benchmark-results.csv
 ```
 
-Each profile executes a complete depth-two experiment at `N = L + 1`, covering
-setup, build, addition, deletion, and both witness types. It also reports a
-separately labelled path-size projection at `N_max = 2^32`, using the exact
-canonical byte length of the real proofs produced by that profile. It does not
-claim to execute a dense build over `2^32` position-dependent leaves. See
+Each profile executes the real authentication-path depth induced by
+`N_max = 2^32`: P1 uses four levels, P2 uses three, and P3 uses two. The
+benchmark performs an actual commitment, non-interactive LaBRADOR proof,
+canonical serialization, and verification at every level; P1/P2 are not
+projected from a depth-two run. It materializes only the selected path and does
+not claim to execute a dense build over `2^32` position-dependent leaves. See
 [`docs/benchmarking.md`](docs/benchmarking.md) for the methodology.
 
 For a publication run with ten repetitions plus CPU, compiler, OS, and commit
