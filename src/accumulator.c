@@ -1,5 +1,6 @@
 #include "verkle_accumulator/accumulator.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -258,8 +259,19 @@ int acc_verify(const acc_public_parameters *pp, const acc_value *acc,
     if (va_statement_init(&principal, &pp->tree.vc, current, path[level],
                           expected.scalar) != 0)
       goto end;
-    if (va_verify(&proof_bundle->opening_proofs[level], &principal) != 0)
-      goto end;
+    {
+      const int verify_ret =
+          va_verify(&proof_bundle->opening_proofs[level], &principal);
+      if (verify_ret != 0) {
+        if (getenv("VA_BENCH_DIAGNOSTICS") != NULL)
+          fprintf(stderr,
+                  "%s accumulator verification failed at level %zu/%zu "
+                  "(LaBRADOR status %d)\n",
+                  VA_PROFILE_NAME, level + 1U, proof_bundle->depth,
+                  verify_ret);
+        goto end;
+      }
+    }
     free_prncplstmnt(&principal);
     memset(&principal, 0, sizeof(principal));
     current = child;
@@ -269,9 +281,20 @@ int acc_verify(const acc_public_parameters *pp, const acc_value *acc,
   if (va_statement_init(&principal, &pp->tree.vc, current,
                         path[proof_bundle->depth - 1U], expected.scalar) != 0)
     goto end;
-  if (va_verify(&proof_bundle->opening_proofs[proof_bundle->depth - 1U],
-                &principal) != 0)
-    goto end;
+  {
+    const size_t leaf_level = proof_bundle->depth - 1U;
+    const int verify_ret =
+        va_verify(&proof_bundle->opening_proofs[leaf_level], &principal);
+    if (verify_ret != 0) {
+      if (getenv("VA_BENCH_DIAGNOSTICS") != NULL)
+        fprintf(stderr,
+                "%s accumulator verification failed at level %zu/%zu "
+                "(LaBRADOR status %d)\n",
+                VA_PROFILE_NAME, leaf_level + 1U, proof_bundle->depth,
+                verify_ret);
+      goto end;
+    }
+  }
   ret = VT_OK;
 
 end:

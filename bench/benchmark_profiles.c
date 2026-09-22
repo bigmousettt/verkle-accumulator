@@ -230,6 +230,7 @@ static int witness_generate(const acc_public_parameters *pp,
                             acc_witness *proof_bundle,
                             witness_metrics *metrics) {
   va_opening_relation opening = {0};
+  const int diagnostics = getenv("VA_BENCH_DIAGNOSTICS") != NULL;
   size_t level;
   double total_start;
   int ret = VT_OK;
@@ -267,8 +268,25 @@ static int witness_generate(const acc_public_parameters *pp,
       goto err;
     }
     if (va_prove(&proof_bundle->opening_proofs[level], &opening) != 0) {
+      if (diagnostics)
+        fprintf(stderr, "%s proof generation failed at level %zu\n",
+                VA_PROFILE_NAME, level + 1U);
       ret = VT_ERR_VC;
       goto err;
+    }
+    if (diagnostics) {
+      const int verify_ret =
+          va_verify(&proof_bundle->opening_proofs[level], &opening.statement);
+      fprintf(stderr,
+              "%s generated level %zu/%zu: layers=%zu, comkey=%zu, "
+              "immediate_verify=%s (%d)\n",
+              VA_PROFILE_NAME, level + 1U, fixture->depth,
+              proof_bundle->opening_proofs[level].l, comkey_len,
+              verify_ret == 0 ? "ok" : "FAILED", verify_ret);
+      if (verify_ret != 0) {
+        ret = VT_ERR_VC;
+        goto err;
+      }
     }
     metrics->level_prove_s[level] = now_seconds() - start;
     va_opening_relation_clear(&opening);
@@ -314,6 +332,9 @@ static int witness_verify_levels(const acc_public_parameters *pp,
     }
     start = now_seconds();
     if (va_verify(&proof_bundle->opening_proofs[level], &principal) != 0) {
+      if (getenv("VA_BENCH_DIAGNOSTICS") != NULL)
+        fprintf(stderr, "%s path verification failed at level %zu/%zu\n",
+                VA_PROFILE_NAME, level + 1U, proof_bundle->depth);
       free_prncplstmnt(&principal);
       return VT_ERR_VC;
     }
