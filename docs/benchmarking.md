@@ -66,6 +66,11 @@ the CPU, compiler, operating system, and Git commit alongside the CSV:
 ./scripts/run_benchmarks.sh 30
 ```
 
+Run `make -s analyze-niaok` first and archive its generated report with the
+benchmark CSV. Proof sizes and timings must be collected from the same commit:
+changing the challenge distribution, extraction slack, M-SIS target, or
+recursive decomposition policy changes the proof objects being measured.
+
 Disable unrelated workloads and fixed-frequency/power-policy changes while
 collecting final results. Report at least the median and a dispersion measure
 for each timing column.

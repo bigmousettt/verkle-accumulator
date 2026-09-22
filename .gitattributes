@@ -1,4 +1,5 @@
 # Keep executable scripts and build inputs portable across Windows Git and WSL.
 *.sh text eol=lf
 Makefile text eol=lf
-*.patch text eol=lf
+# Unified diffs encode blank context lines as a single leading space.
+*.patch text eol=lf whitespace=-blank-at-eol,-blank-at-eof

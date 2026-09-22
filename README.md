@@ -108,6 +108,19 @@ metadata, use:
 ./scripts/run_benchmarks.sh 10
 ```
 
+Analyze the concrete parameters of one real non-interactive LaBRADOR opening
+for every profile with:
+
+```sh
+make -s analyze-niaok
+```
+
+This writes the runtime relation trace, recursive-layer dimensions, M-SIS
+bounds, Core-SVP estimates, and a proof-system-only diagnostic report under
+`build/niaok-analysis/`. The analysis does not include the VC binding or
+knMLWE hiding assumptions. Its scope and remaining qualifications are
+documented in [`docs/niaok-analysis.md`](docs/niaok-analysis.md).
+
 The byte-level format is documented in
 [`docs/witness-wire-format.md`](docs/witness-wire-format.md).
 
@@ -120,11 +133,23 @@ the upstream mixed-constraint loops do not advance correctly when full-ring
 and constant-coefficient relations appear in the same statement.
 It also applies `patches/labrador-zero-length-vla.patch` to avoid invoking an
 upstream conversion helper with a zero-length variable-length array.
+The generated build copy additionally applies the degree-64, two-splitting
+challenge and relaxed-opening bounds used by the non-interactive analysis in
+*Aggregating Falcon Signatures with LaBRADOR*. The pinned submodule itself is
+not modified.
 
 ## Security status
 
-This is research prototype code, not production cryptography. The parameters
-are candidate benchmark parameters and still require concrete MSIS/knMLWE
-estimation. The upstream composite protocol is non-interactive through its
-Fiat-Shamir transcript, but its final opening is not a zero-knowledge layer.
-Do not use this code where witness privacy or production security is required.
+This is research prototype code, not production cryptography. The repository
+now exports and estimates all recursive M-SIS instances arising inside one
+non-interactive LaBRADOR proof. It also reports a conservative lower bound on
+the post-rejection challenge-set cardinality and a separately labelled
+well-spreadness diagnostic. The latter is not a replacement for proving the
+well-spreadness hypothesis for the instantiated challenge set. A strict
+128-bit knowledge-soundness claim still requires that proof, an explicit
+random-oracle-query convention, and retuning to absorb the additive loss
+across recursive layers. Separately, the application-level
+VC binding and knMLWE hiding assumptions have not yet been estimated. The
+composite protocol is non-interactive through its Fiat--Shamir transcript, but
+its final opening is not a zero-knowledge layer. Do not use this code where
+witness privacy or production security is required.

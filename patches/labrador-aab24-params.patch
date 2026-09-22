@@ -1,0 +1,73 @@
+--- data-source.h
++++ data.h
+@@ -6,10 +6,20 @@
+ #endif
+ #define QBYTES ((LOGQ+7)/8)
+-#define LOGDELTA log2(1.00444)
++/*
++ * 128-bit classical Core-SVP target in the BDGL16/GSA model used by the
++ * Aggregate Falcon supplementary estimator (BKZ block size 438).
++ */
++#define LOGDELTA log2(1.0037379088123108)
+ #define LIFTS ((128+LOGQ-1)/LOGQ)
+-#define TAU1 32
+-#define TAU2 8
+-#define T 14  // challenge operator norm
+-#define SLACK 2 // FIXME
++/* AAB+24 degree-64, two-splitting challenge C_{43,2}. */
++#define CHALLENGE_WEIGHT 43
++#define CHALLENGE_GAMMA 2
++#define CHALLENGE_NORMSQ 86
++#define T 43
++/* Compatibility aliases for upstream norm-bound expressions. */
++#define TAU1 CHALLENGE_NORMSQ
++#define TAU2 0
++/* sqrt(128/30) < 2.066. */
++#define SLACK 2.066
+ 
+ #if LOGQ == 24
+@@ -91,7 +101,7 @@
+   zz xvec[K];
+ } qdata;
+ 
+-static void zz_fromint64(zz *r, int64_t a) {
++static inline void zz_fromint64(zz *r, int64_t a) {
+   size_t i;
+ 
+   for(i=0;i<L-1;i++) {
+@@ -102,7 +112,7 @@
+   r->limbs[L-1] = a;
+ }
+ 
+-static int zz_less_than(const zz *a, const zz *b) {
++static inline int zz_less_than(const zz *a, const zz *b) {
+   int i;
+   int16_t c = 0;
+ 
+@@ -112,7 +122,7 @@
+   return c;
+ }
+ 
+-static int zz_equal(const zz *a, const zz *b) {
++static inline int zz_equal(const zz *a, const zz *b) {
+   int i;
+   int16_t c = 0;
+   int16_t r = 0;
+@@ -130,7 +140,7 @@
+   return r;
+ }
+ 
+-static void zz_add(zz *r, const zz *a, const zz *b) {
++static inline void zz_add(zz *r, const zz *a, const zz *b) {
+   size_t i;
+   int16_t c;
+ 
+@@ -143,7 +153,7 @@
+   r->limbs[L-1] = a->limbs[L-1] + b->limbs[L-1] + c;
+ }
+ 
+-static void zz_sub(zz *r, const zz *a, const zz *b) {
++static inline void zz_sub(zz *r, const zz *a, const zz *b) {
+   size_t i;
+   int16_t c;
+ 

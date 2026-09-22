@@ -1,0 +1,46 @@
+--- labrador-source.c
++++ labrador.c
+@@ -19,5 +19,18 @@
+ size_t comkey_len = 0;
+ polx *comkey = NULL;
+ 
++/*
++ * Reconstructing an f-part base-B decomposition multiplies the extracted
++ * opening bound by 1 + B + ... + B^(f-1).  For the common f=2 case this is
++ * the (b+1) factor in AAB+24, Theorem 5.2 and Appendix I.5.
++ */
++static double opening_reconstruction_factor(const comparams *cpp) {
++  size_t i;
++  double factor = 0.0;
++  for(i=0;i<cpp->f;i++)
++    factor += ldexp(1,i*cpp->b);
++  return factor;
++}
++
+ static size_t triangularidx(size_t i,size_t j,size_t r) {
+   if(i>j) {  // swap
+@@ -135,5 +148,5 @@
+     varz /= nn*N;
+     varz *= TAU1+4*TAU2;
+-    decompose = !tail && !sis_secure(13,6*T*SLACK*sqrt(2*(TAU1+4*TAU2)*varz*nn*N));
++    decompose = !tail && !sis_secure(13,8*T*SLACK*sqrt(2*(TAU1+4*TAU2)*varz*nn*N));
+     decompose = decompose || 64*varz > (1 << 28);
+     if(decompose) {
+@@ -193,6 +206,7 @@
+                        + ldexp(1,2*(LOGQ-(cpp->fu-1)*cpp->bu)))/12*(rr*cpp->kappa+(rr*rr+rr)/2);
+       }
+       pi->normsq *= N;
+-      if(sis_secure(cpp->kappa,6*T*SLACK*ldexp(1,(cpp->f-1)*cpp->b)*sqrt(pi->normsq)))
++      if(sis_secure(cpp->kappa,8*T*SLACK*opening_reconstruction_factor(cpp)
++                    *sqrt(pi->normsq)))
+         break;
+     }
+@@ -1044,6 +1058,7 @@
+   polx (*phi)[n] = (polx(*)[n])ost->cnst->phi;
+ 
+   ost->betasq = pi->normsq;
+-  if(!sis_secure(cpp->kappa,6*T*SLACK*ldexp(1,(cpp->f-1)*cpp->b)*sqrt(ost->betasq))) {
++  if(!sis_secure(cpp->kappa,8*T*SLACK*opening_reconstruction_factor(cpp)
++                 *sqrt(ost->betasq))) {
+     fprintf(stderr,"ERROR in reduce_amortize(): Inner commitments not secure\n");
+     return 1;

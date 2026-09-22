@@ -1,0 +1,46 @@
+--- poly-source.c
++++ poly.c
+@@ -319,31 +319,37 @@
+ static inline size_t challenge(poly *c, size_t len, const uint8_t *buf, size_t buflen) {
+   size_t i,j;
+   int k,b;
+-  uint64_t signs;
++  uint64_t signs,magnitudes;
++  unsigned int normsquared;
+ 
+   i = j = 0;
+-  while(i < len && j <= buflen-(TAU1+TAU2+(TAU1+TAU2+7)/8)) {
+-    signs = 0;
+-    for(k=0;k<(TAU1+TAU2+7)/8;k++)
++  while(i < len && j <= buflen-(CHALLENGE_WEIGHT+12)) {
++    signs = magnitudes = 0;
++    for(k=0;k<6;k++)
+       signs |= (uint64_t)buf[j++] << 8*k;
++    for(k=0;k<6;k++)
++      magnitudes |= (uint64_t)buf[j++] << 8*k;
+ 
+     polyvec_setzero(&c[i],1);
+-
+-    k = N-TAU1-TAU2;
++    normsquared = 0;
++    k = N-CHALLENGE_WEIGHT;
+     while(k < N && j < buflen) {
+       b = buf[j++] & (N-1);
+       if(b <= k) {
++        int coefficient = (magnitudes & 1) + 1;
+         c[i].vec->c[k] = c[i].vec->c[b];
+-        c[i].vec->c[b] = (k < N-TAU2) ? 1 : 2;
++        c[i].vec->c[b] = coefficient;
++        normsquared += coefficient*coefficient;
+         c[i].vec->c[b] -= (signs & 1) * (2*c[i].vec->c[b]);
+         signs >>= 1;
++        magnitudes >>= 1;
+         k += 1;
+       }
+     }
+ 
+-    if(k == N && poly_opnorm(&c[i]) <= T)
++    if(k == N && normsquared <= CHALLENGE_NORMSQ && poly_opnorm(&c[i]) <= T)
+       i += 1;
+   }
+ 
