@@ -4,6 +4,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+static uint64_t acc_debug_checksum(const void *data, size_t length) {
+  const uint8_t *bytes = data;
+  uint64_t result = UINT64_C(1469598103934665603);
+  size_t i;
+
+  for (i = 0; i < length; ++i) {
+    result ^= bytes[i];
+    result *= UINT64_C(1099511628211);
+  }
+  return result;
+}
+
 static void *acc_aligned_calloc(size_t count, size_t size) {
   size_t bytes;
   void *allocation;
@@ -260,10 +272,29 @@ int acc_verify(const acc_public_parameters *pp, const acc_value *acc,
                           expected.scalar) != 0)
       goto end;
     {
+      const int diagnostics = getenv("VA_BENCH_DIAGNOSTICS") != NULL;
+      const uint64_t key_before =
+          diagnostics
+              ? acc_debug_checksum(comkey, comkey_len * sizeof(*comkey))
+              : 0;
       const int verify_ret =
           va_verify(&proof_bundle->opening_proofs[level], &principal);
+      const uint64_t key_after =
+          diagnostics
+              ? acc_debug_checksum(comkey, comkey_len * sizeof(*comkey))
+              : 0;
+      if (diagnostics)
+        fprintf(stderr,
+                "%s forward check level %zu/%zu: coordinate=%u, "
+                "statement=%02x%02x%02x%02x%02x, key=%016llx->%016llx, "
+                "status=%d\n",
+                VA_PROFILE_NAME, level + 1U, proof_bundle->depth,
+                (unsigned int)path[level], principal.h[0], principal.h[1],
+                principal.h[2], principal.h[3], principal.h[4],
+                (unsigned long long)key_before,
+                (unsigned long long)key_after, verify_ret);
       if (verify_ret != 0) {
-        if (getenv("VA_BENCH_DIAGNOSTICS") != NULL)
+        if (diagnostics)
           fprintf(stderr,
                   "%s accumulator verification failed at level %zu/%zu "
                   "(LaBRADOR status %d)\n",

@@ -279,9 +279,12 @@ static int witness_generate(const acc_public_parameters *pp,
           va_verify(&proof_bundle->opening_proofs[level], &opening.statement);
       fprintf(stderr,
               "%s generated level %zu/%zu: layers=%zu, comkey=%zu, "
-              "immediate_verify=%s (%d)\n",
+              "statement=%02x%02x%02x%02x%02x, immediate_verify=%s (%d)\n",
               VA_PROFILE_NAME, level + 1U, fixture->depth,
               proof_bundle->opening_proofs[level].l, comkey_len,
+              opening.statement.h[0], opening.statement.h[1],
+              opening.statement.h[2], opening.statement.h[3],
+              opening.statement.h[4],
               verify_ret == 0 ? "ok" : "FAILED", verify_ret);
       if (verify_ret != 0) {
         ret = VT_ERR_VC;
@@ -335,9 +338,11 @@ static int witness_generate(const acc_public_parameters *pp,
           va_verify(&proof_bundle->opening_proofs[level], &principal);
       fprintf(stderr,
               "%s reverse check level %zu/%zu: original_statement=%s (%d), "
-              "path_value_match=%s\n",
+              "statement=%02x%02x%02x%02x%02x, path_value_match=%s\n",
               VA_PROFILE_NAME, level + 1U, fixture->depth,
               verify_ret == 0 ? "ok" : "FAILED", verify_ret,
+              principal.h[0], principal.h[1], principal.h[2], principal.h[3],
+              principal.h[4],
               path_value_matches ? "yes" : "NO");
       free_prncplstmnt(&principal);
     }
