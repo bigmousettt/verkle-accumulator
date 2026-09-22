@@ -36,6 +36,100 @@ typedef struct {
   size_t wire_bytes;
 } witness_metrics;
 
+static int packed_polz_equal(const polz *left, const polz *right,
+                             int *raw_equal) {
+  __attribute__((aligned(64))) uint8_t left_bytes[N * QBYTES];
+  __attribute__((aligned(64))) uint8_t right_bytes[N * QBYTES];
+
+  if (raw_equal != NULL)
+    *raw_equal = memcmp(left, right, sizeof(*left)) == 0;
+  polz_bitpack(left_bytes, left);
+  polz_bitpack(right_bytes, right);
+  return memcmp(left_bytes, right_bytes, sizeof(left_bytes)) == 0;
+}
+
+static const char *proof_difference(const proof *left, const proof *right,
+                                    int *raw_polz_equal) {
+  const comparams *a = left->cpp;
+  const comparams *b = right->cpp;
+  size_t i, count;
+
+  if (left->r != right->r)
+    return "r";
+  if (left->tail != right->tail)
+    return "tail";
+#define COMPARE_PARAM(field)                                                   \
+  do {                                                                         \
+    if (a->field != b->field)                                                   \
+      return "cpp." #field;                                                    \
+  } while (0)
+  COMPARE_PARAM(f);
+  COMPARE_PARAM(fu);
+  COMPARE_PARAM(fg);
+  COMPARE_PARAM(b);
+  COMPARE_PARAM(bu);
+  COMPARE_PARAM(bg);
+  COMPARE_PARAM(kappa);
+  COMPARE_PARAM(kappa1);
+  COMPARE_PARAM(u1len);
+  COMPARE_PARAM(u2len);
+#undef COMPARE_PARAM
+  if (left->jlnonce != right->jlnonce)
+    return "jlnonce";
+  if (left->normsq != right->normsq)
+    return "normsq";
+  for (i = 0; i < left->r; ++i) {
+    if (left->n[i] != right->n[i])
+      return "n";
+    if (left->nu[i] != right->nu[i])
+      return "nu";
+  }
+  if (memcmp(left->p, right->p, sizeof(left->p)) != 0)
+    return "projection";
+  count = a->u1len + a->u2len + LIFTS;
+  for (i = 0; i < count; ++i) {
+    int current_raw_equal;
+    if (!packed_polz_equal(&left->u1[i], &right->u1[i],
+                           &current_raw_equal))
+      return "proof polynomial";
+    if (!current_raw_equal && raw_polz_equal != NULL)
+      *raw_polz_equal = 0;
+  }
+  return NULL;
+}
+
+static const char *witness_difference(const witness *left,
+                                      const witness *right) {
+  size_t i;
+  if (left->r != right->r)
+    return "final witness r";
+  for (i = 0; i < left->r; ++i) {
+    if (left->n[i] != right->n[i])
+      return "final witness n";
+    if (left->normsq[i] != right->normsq[i])
+      return "final witness normsq";
+    if (memcmp(left->s[i], right->s[i], left->n[i] * sizeof(poly)) != 0)
+      return "final witness coefficients";
+  }
+  return NULL;
+}
+
+static const char *composite_difference(const composite *left,
+                                        const composite *right,
+                                        int *raw_polz_equal) {
+  const char *difference;
+  size_t i;
+  if (left->l != right->l)
+    return "number of proof layers";
+  for (i = 0; i < left->l; ++i) {
+    difference = proof_difference(left->pi[i], right->pi[i],
+                                  raw_polz_equal);
+    if (difference != NULL)
+      return difference;
+  }
+  return witness_difference(&left->owt, &right->owt);
+}
+
 static int checked_add(size_t left, size_t right, size_t *result) {
   if (result == NULL || left > SIZE_MAX - right)
     return 0;
@@ -455,10 +549,44 @@ static int witness_measure_and_check(const acc_public_parameters *pp,
   if (acc_witness_encode(encoded, metrics->wire_bytes, &written,
                          proof_bundle) != VT_OK ||
       written != metrics->wire_bytes ||
-      acc_witness_decode(pp, &decoded, encoded, written) != VT_OK ||
-      acc_verify(pp, root, x, &decoded, type) != VT_OK) {
+      acc_witness_decode(pp, &decoded, encoded, written) != VT_OK) {
     ret = VT_ERR_VC;
     goto end;
+  }
+  if (getenv("VA_BENCH_DIAGNOSTICS") != NULL) {
+    size_t i;
+    for (i = 0; i < proof_bundle->proof_count; ++i) {
+      int raw_polz_equal = 1;
+      const char *difference = composite_difference(
+          &proof_bundle->opening_proofs[i], &decoded.opening_proofs[i],
+          &raw_polz_equal);
+      fprintf(stderr,
+              "%s wire compare level %zu/%zu: semantic=%s, "
+              "raw_polz=%s, commitment=%s\n",
+              VA_PROFILE_NAME, i + 1U, proof_bundle->proof_count,
+              difference == NULL ? "equal" : difference,
+              raw_polz_equal ? "equal" : "DIFFERENT",
+              i == 0 || va_commitment_equal(
+                            &proof_bundle->intermediate_commitments[i - 1U],
+                            &decoded.intermediate_commitments[i - 1U])
+                  ? "equal"
+                  : "DIFFERENT");
+    }
+  }
+  {
+    const int decoded_status = acc_verify(pp, root, x, &decoded, type);
+    if (decoded_status != VT_OK) {
+      if (getenv("VA_BENCH_DIAGNOSTICS") != NULL) {
+        const int original_retry =
+            acc_verify(pp, root, x, proof_bundle, type);
+        fprintf(stderr,
+                "%s decoded witness verification=%d; "
+                "original retry verification=%d\n",
+                VA_PROFILE_NAME, decoded_status, original_retry);
+      }
+      ret = VT_ERR_VC;
+      goto end;
+    }
   }
 
 end:
