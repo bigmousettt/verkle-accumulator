@@ -291,6 +291,57 @@ static int witness_generate(const acc_public_parameters *pp,
     metrics->level_prove_s[level] = now_seconds() - start;
     va_opening_relation_clear(&opening);
   }
+  if (diagnostics) {
+    /*
+     * Rebuild each original per-node statement in reverse order.  This
+     * separates proof corruption/shared-state failures from a mismatch
+     * between the path value stored in the node and the value reconstructed
+     * by Acc.Verify from the child commitment.
+     */
+    for (level = fixture->depth; level-- > 0;) {
+      const vt_node *node = &fixture->nodes[level];
+      const uint32_t *actual =
+          &node->values[(size_t)fixture->path[level] * VA_KAPPA];
+      prncplstmnt principal = {0};
+      vt_value expected;
+      int path_value_matches;
+      int verify_ret;
+
+      if (level + 1U < fixture->depth) {
+        vt_hash_node(&expected, level + 1U,
+                     &fixture->nodes[level + 1U].commitment);
+        path_value_matches =
+            memcmp(actual, expected.scalar, sizeof(expected.scalar)) == 0;
+      } else {
+        vt_value member_leaf, nonmember_leaf;
+        vt_hash_leaf(&member_leaf, ACC_MEMBERSHIP, fixture->x);
+        vt_hash_leaf(&nonmember_leaf, ACC_NONMEMBERSHIP, fixture->x);
+        path_value_matches =
+            memcmp(actual, member_leaf.scalar, sizeof(member_leaf.scalar)) == 0 ||
+            memcmp(actual, nonmember_leaf.scalar,
+                   sizeof(nonmember_leaf.scalar)) == 0;
+      }
+
+      if (va_statement_init(&principal, &pp->tree.vc, &node->commitment,
+                            fixture->path[level], actual) != 0) {
+        fprintf(stderr,
+                "%s reverse check level %zu/%zu: statement_init=FAILED, "
+                "path_value_match=%s\n",
+                VA_PROFILE_NAME, level + 1U, fixture->depth,
+                path_value_matches ? "yes" : "NO");
+        continue;
+      }
+      verify_ret =
+          va_verify(&proof_bundle->opening_proofs[level], &principal);
+      fprintf(stderr,
+              "%s reverse check level %zu/%zu: original_statement=%s (%d), "
+              "path_value_match=%s\n",
+              VA_PROFILE_NAME, level + 1U, fixture->depth,
+              verify_ret == 0 ? "ok" : "FAILED", verify_ret,
+              path_value_matches ? "yes" : "NO");
+      free_prncplstmnt(&principal);
+    }
+  }
   metrics->prove_s = now_seconds() - total_start;
   return VT_OK;
 
