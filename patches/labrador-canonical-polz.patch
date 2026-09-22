@@ -1,0 +1,70 @@
+--- polz-zero-vla.c
++++ polz.c
+@@ -302,35 +302,43 @@
+ void polz_reduce(polz *r) {
+-  size_t i,j;
++  size_t i,j,pass;
+   __m512i f,g,h;
+   const __m512i qoff = _mm512_set1_epi16(QOFF);
+   const __m512i qofft4 = _mm512_slli_epi16(qoff,2);
+   const __m512i mask14 = _mm512_set1_epi16(0x3FFF);
+   const __m512i maskhi = _mm512_srli_epi16(mask14,14*L-LOGQ);
+ 
+-  for(i=0;i<N/32;i++) {
+-    f = _mm512_load_si512(&r->limbs[L-1].v[i]);
+-    g = _mm512_srai_epi16(f,LOGQ-14*(L-1));
+-    f = _mm512_and_si512(f,maskhi);
+-    _mm512_store_si512(&r->limbs[L-1].v[i],f);
+-
+-    f = _mm512_load_si512(&r->limbs[0].v[i]);
+-    h = _mm512_mullo_epi16(g,qoff);
+-    g = _mm512_mulhi_epi16(g,qofft4);
+-    h = _mm512_and_si512(h,mask14);
+-    f = _mm512_add_epi16(f,h);
+-    h = _mm512_srai_epi16(f,14);
+-    f = _mm512_and_si512(f,mask14);
+-    g = _mm512_add_epi16(g,h);
+-    _mm512_store_si512(&r->limbs[0].v[i],f);
+-
+-    for(j=1;j<L;j++) {
+-      f = _mm512_load_si512(&r->limbs[j].v[i]);
+-      f = _mm512_add_epi16(f,g);
+-      if(j<L-1) {
+-        g = _mm512_srai_epi16(f,14);
+-        f = _mm512_and_si512(f,mask14);
++  /*
++   * The first pass can propagate one final carry into the most significant
++   * limb after that limb has already been reduced.  A second pass folds that
++   * carry modulo q and makes the base-2^14 representation stable under the
++   * public bitpack/bitunpack encoding.
++   */
++  for(pass=0;pass<2;pass++) {
++    for(i=0;i<N/32;i++) {
++      f = _mm512_load_si512(&r->limbs[L-1].v[i]);
++      g = _mm512_srai_epi16(f,LOGQ-14*(L-1));
++      f = _mm512_and_si512(f,maskhi);
++      _mm512_store_si512(&r->limbs[L-1].v[i],f);
++
++      f = _mm512_load_si512(&r->limbs[0].v[i]);
++      h = _mm512_mullo_epi16(g,qoff);
++      g = _mm512_mulhi_epi16(g,qofft4);
++      h = _mm512_and_si512(h,mask14);
++      f = _mm512_add_epi16(f,h);
++      h = _mm512_srai_epi16(f,14);
++      f = _mm512_and_si512(f,mask14);
++      g = _mm512_add_epi16(g,h);
++      _mm512_store_si512(&r->limbs[0].v[i],f);
++
++      for(j=1;j<L;j++) {
++        f = _mm512_load_si512(&r->limbs[j].v[i]);
++        f = _mm512_add_epi16(f,g);
++        if(j<L-1) {
++          g = _mm512_srai_epi16(f,14);
++          f = _mm512_and_si512(f,mask14);
++        }
++        _mm512_store_si512(&r->limbs[j].v[i],f);
+       }
+-      _mm512_store_si512(&r->limbs[j].v[i],f);
+     }
+   }
+ }

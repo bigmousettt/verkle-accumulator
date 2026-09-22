@@ -54,9 +54,12 @@ build/labrador/chihuahua.c: build/labrador/chihuahua-source.c \
 	patch -s -o $@ $< < patches/labrador-mixed-constraints.patch
 build/labrador/polz-source.c: $(LABRADOR_DIR)/polz.c | build/labrador
 	sed 's/\r$$//' $< > $@
-build/labrador/polz.c: build/labrador/polz-source.c \
+build/labrador/polz-zero-vla.c: build/labrador/polz-source.c \
 		patches/labrador-zero-length-vla.patch | build/labrador
 	patch -s -o $@ $< < patches/labrador-zero-length-vla.patch
+build/labrador/polz.c: build/labrador/polz-zero-vla.c \
+		patches/labrador-canonical-polz.patch | build/labrador
+	patch -s -o $@ $< < patches/labrador-canonical-polz.patch
 build/test_vc: tests/test_vc.c src/vc.c $(LABRADOR_SOURCES) | build
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 build/test_tree: tests/test_tree.c src/tree.c src/vc.c $(LABRADOR_SOURCES) | build
@@ -123,4 +126,4 @@ clean:
 		build/labrador/randombytes.c build/labrador/chihuahua-source.c \
 		build/labrador/chihuahua.c build/labrador/chihuahua.c.rej \
 		build/labrador/polz-source.c build/labrador/polz.c \
-		build/labrador/polz.c.rej
+		build/labrador/polz-zero-vla.c build/labrador/polz.c.rej
